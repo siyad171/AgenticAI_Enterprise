@@ -1,0 +1,15 @@
+# Environment
+.venv/
+.env
+__pycache__/
+*.pyc
+
+# Data (user-generated)
+data/interview_results/
+data/learning/
+data/uploads/
+
+# IDE
+.vscode/
+.idea/
+*.swp
