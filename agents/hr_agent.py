@@ -1,7 +1,7 @@
 """
 HR Agent — Leave processing, onboarding, policy Q&A, audit, candidate evaluation, resume parsing
 """
-import datetime, re, json, random, string
+import datetime, re, json, random, string, os
 from typing import Dict, List, Optional
 from core.base_agent import BaseAgent
 from core.config import CANDIDATE_REVIEW_THRESHOLD as SKILL_MATCH_THRESHOLD, CANDIDATE_ACCEPT_THRESHOLD as AUTO_ACCEPT_THRESHOLD
@@ -269,6 +269,21 @@ class HRAgent(BaseAgent):
     # ══════════════════════════════════════════════════════════════
     #  5.  EVALUATE CANDIDATE
     # ══════════════════════════════════════════════════════════════
+    def _normalize_education_level(self, education_text: str) -> int:
+        """Extract education level from text and return hierarchy value (higher = more qualified)"""
+        text = education_text.lower()
+        if any(x in text for x in ['phd', 'ph.d', 'doctorate']):
+            return 5
+        elif any(x in text for x in ['master', "master's", 'm.sc', 'm.s.', 'mba', 'mca']):
+            return 4
+        elif any(x in text for x in ['bachelor', "bachelor's", 'b.sc', 'b.s.', 'b.tech', 'b.e.', 'bca']):
+            return 3
+        elif any(x in text for x in ['diploma', 'associate']):
+            return 2
+        elif any(x in text for x in ['high school', 'secondary', '12th', 'hsc']):
+            return 1
+        return 0  # Not specified or unknown
+
     def evaluate_candidate(self, candidate, job_position) -> Dict:
         criteria = self.db.eligibility_criteria
         required = {s.lower() for s in job_position.required_skills}
@@ -277,7 +292,10 @@ class HRAgent(BaseAgent):
         skill_pct = (len(matched) / len(required) * 100) if required else 0
 
         exp_met = candidate.experience_years >= job_position.min_experience
-        edu_met = job_position.min_education.lower() in candidate.education.lower()
+        # Use normalized education level comparison instead of simple substring match
+        candidate_edu_level = self._normalize_education_level(candidate.education)
+        required_edu_level = self._normalize_education_level(job_position.min_education)
+        edu_met = candidate_edu_level >= required_edu_level
 
         score = skill_pct
         if criteria.get('experience_required', True) and not exp_met:
@@ -327,15 +345,51 @@ class HRAgent(BaseAgent):
                     prompt, "Expert resume parser. Return valid JSON only.",
                     include_employee_data=False
                 )
+                # Save LLM response for debugging
+                self._save_resume_parse_log(resume_text, prompt, resp)
+                
                 m = re.search(r'\{[\s\S]*\}', resp)
                 if m:
                     data = json.loads(m.group(0))
                     return {"skills": data.get("skills", []),
                             "experience_years": int(data.get("experience_years", 0)),
                             "education": data.get("education", "Not Specified")}
-            except Exception:
-                pass
+            except Exception as e:
+                # Also log parse failures
+                self._save_resume_parse_log(resume_text, prompt if 'prompt' in locals() else "", 
+                                           resp if 'resp' in locals() else "", 
+                                           error=str(e))
         return self._fallback_parse(resume_text)
+
+    def _save_resume_parse_log(self, resume_text: str, prompt: str, llm_response: str, error: str = None):
+        """Save LLM resume parsing response to JSON file for debugging"""
+        try:
+            # Create logs directory if it doesn't exist
+            log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs', 'resume_parsing')
+            os.makedirs(log_dir, exist_ok=True)
+            
+            # Generate filename with timestamp
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            log_file = os.path.join(log_dir, f'resume_parse_{timestamp}.json')
+            
+            # Prepare log data
+            log_data = {
+                'timestamp': datetime.datetime.now().isoformat(),
+                'resume_text_preview': resume_text[:500] + '...' if len(resume_text) > 500 else resume_text,
+                'resume_text_length': len(resume_text),
+                'prompt_sent': prompt,
+                'llm_response': llm_response,
+                'error': error
+            }
+            
+            # Save to file
+            with open(log_file, 'w', encoding='utf-8') as f:
+                json.dump(log_data, f, indent=2, ensure_ascii=False)
+            
+            self.log_action("Resume Parse Log Saved", {"file": log_file})
+        except Exception as log_error:
+            # Don't let logging errors break the parsing flow
+            print(f"Warning: Could not save resume parse log: {log_error}")
 
     def _fallback_parse(self, text: str) -> Dict:
         t = text.lower()
