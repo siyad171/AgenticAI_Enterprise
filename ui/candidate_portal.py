@@ -15,6 +15,14 @@ def show_candidate_portal():
 
     step = st.session_state.candidate_step
 
+    # Persist candidate progress into cookie so refresh keeps the step
+    session_mgr = st.session_state.get('session_mgr')
+    if session_mgr:
+        session_mgr.save_candidate_progress(
+            step,
+            st.session_state.get('current_candidate_id'),
+        )
+
     if step == "application":
         _show_application_form(agent, db)
     elif step == "application_result":
@@ -35,9 +43,9 @@ def show_candidate_portal():
     elif step == "complete":
         st.success("🎉 Application complete! You will be notified by email.")
         if st.button("← Back to Login"):
-            st.session_state.show_application_form = False
+            from ui.utils import logout
             st.session_state.candidate_step = "application"
-            st.rerun()
+            logout()
 
 
 def _show_application_form(agent, db):
@@ -46,8 +54,8 @@ def _show_application_form(agent, db):
 
     # Back button
     if st.button("← Back to Login"):
-        st.session_state.show_application_form = False
-        st.rerun()
+        from ui.utils import logout
+        logout()
 
     # Position selection (outside form so job details update live)
     active_jobs = {jid: j for jid, j in db.job_positions.items()

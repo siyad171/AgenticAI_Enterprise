@@ -62,6 +62,16 @@ if 'logged_in' not in st.session_state:
 if 'current_user' not in st.session_state:
     st.session_state.current_user = None
 
+# ── Persistent Session — restore from query-param token ───────
+from core.session_manager import SessionManager
+
+session_mgr = SessionManager()
+st.session_state.session_mgr = session_mgr          # expose for other pages
+
+# Auto-restore session on page load / refresh
+if not st.session_state.logged_in and not st.session_state.get('show_application_form'):
+    session_mgr.restore_session_state(st.session_state.db)
+
 # ── Router ────────────────────────────────────────────────────
 from ui.login_ui import show_login_page
 

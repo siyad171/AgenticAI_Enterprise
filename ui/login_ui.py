@@ -12,6 +12,8 @@ def show_login_page():
     </div>
     """, unsafe_allow_html=True)
 
+    session_mgr = st.session_state.get('session_mgr')
+
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         tab1, tab2, tab3 = st.tabs(["👤 Candidate", "💼 Employee", "⚙️ Admin"])
@@ -21,6 +23,12 @@ def show_login_page():
             st.markdown("### New Applicant?")
             if st.button("📝 Apply for a Position", use_container_width=True, type="primary"):
                 st.session_state.show_application_form = True
+                # Persist candidate session in cookie
+                if session_mgr:
+                    session_mgr.create_session({
+                        "username": "__candidate__",
+                        "role": "Candidate",
+                    })
                 st.rerun()
 
         # ── Employee Tab ──────────────────────────────────────
@@ -36,6 +44,13 @@ def show_login_page():
                         st.session_state.logged_in = True
                         st.session_state.current_user = user
                         st.session_state.user_role = "Employee"
+                        # Persist in cookie
+                        if session_mgr:
+                            session_mgr.create_session({
+                                "username": user.username,
+                                "role": "Employee",
+                                "employee_id": user.employee_id,
+                            })
                         st.rerun()
                     else:
                         st.error("Invalid credentials")
@@ -53,6 +68,12 @@ def show_login_page():
                         st.session_state.logged_in = True
                         st.session_state.current_user = user
                         st.session_state.user_role = "Admin"
+                        # Persist in cookie
+                        if session_mgr:
+                            session_mgr.create_session({
+                                "username": user.username,
+                                "role": "Admin",
+                            })
                         st.rerun()
                     else:
                         st.error("Invalid credentials")

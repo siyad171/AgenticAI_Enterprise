@@ -18,7 +18,16 @@ def parse_pdf_resume(uploaded_file) -> str:
 
 
 def logout():
-    """Clear session and rerun"""
+    """Clear session cookie and session state, then rerun"""
+    # Destroy persistent cookie
+    session_mgr = st.session_state.get('session_mgr')
+    if session_mgr:
+        try:
+            session_mgr.destroy_session()
+        except Exception:
+            pass  # cookie may already be gone
+
     st.session_state.logged_in = False
     st.session_state.current_user = None
+    st.session_state.show_application_form = False
     st.rerun()
