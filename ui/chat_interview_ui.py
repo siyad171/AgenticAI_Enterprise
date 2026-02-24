@@ -158,7 +158,7 @@ def _show_coding_panel(chat, db, cand_id):
     st.session_state.candidate_code = code
 
     # ── Action buttons ────────────────────────────────────────
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
 
     with c1:
         if st.button("▶️ Run Code", type="primary"):
@@ -219,26 +219,6 @@ def _show_coding_panel(chat, db, cand_id):
                     st.info("No test cases available for this problem")
 
     with c3:
-        if st.button("🤖 AI Review"):
-            with st.spinner("Analyzing code..."):
-                analyzer = AICodeAnalyzer()
-                analysis = analyzer.analyze_code(code, prob.title, language)
-                st.subheader("AI Code Review")
-                st.write(f"**Quality Score:** {analysis.get('code_quality_score', 'N/A')}/100")
-                if analysis.get('strengths'):
-                    st.write("**Strengths:**")
-                    for s in analysis['strengths']:
-                        st.write(f"  ✅ {s}")
-                if analysis.get('weaknesses'):
-                    st.write("**Areas for Improvement:**")
-                    for w in analysis['weaknesses']:
-                        st.write(f"  ⚠️ {w}")
-                if analysis.get('time_complexity'):
-                    st.write(f"**Time Complexity:** {analysis['time_complexity']}")
-                if analysis.get('space_complexity'):
-                    st.write(f"**Space Complexity:** {analysis['space_complexity']}")
-
-    with c4:
         if st.button("📤 Submit Code"):
             storage = InterviewStorage()
             test_results = st.session_state.get('test_results', [])

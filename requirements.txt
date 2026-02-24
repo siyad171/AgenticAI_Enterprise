@@ -5,6 +5,7 @@ python-dotenv==1.1.1
 # === Web UI (Required) ===
 streamlit==1.50.0
 streamlit-ace==0.1.1
+streamlit-webrtc>=0.47.0
 
 # === PDF Parsing (Required for resume upload) ===
 PyPDF2==3.0.1
@@ -12,16 +13,14 @@ PyPDF2==3.0.1
 # === HTTP Requests (Required for Judge0 code execution) ===
 requests==2.31.0
 
+# === Video Interview (Required for WebRTC video) ===
+numpy>=1.24.0
+opencv-python>=4.8.0
+
 # === Testing ===
 pytest>=7.0
 pytest-cov>=4.0
 
-# === Video Analysis (Optional — heavy dependencies) ===
-# Uncomment these if you want video confidence analysis:
-# opencv-python==4.9.0.80
-# numpy==1.26.4
-# librosa==0.10.1
-# moviepy==1.0.3
+# === Emotion Analysis (Optional — install for facial analysis) ===
+# pip install deepface
 # deepface==0.0.89
-# speechbrain==0.5.16
-# torchaudio==2.1.0
