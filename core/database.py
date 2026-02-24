@@ -799,7 +799,7 @@ Leave Balance:
                     {"input": "2 7 11 15\n9", "expected": "0 1", "visible": True},
                     {"input": "3 2 4\n6", "expected": "1 2", "visible": True},
                     {"input": "3 3\n6", "expected": "0 1", "visible": False},
-                    {"input": "1 5 3 7 2\n9", "expected": "1 3", "visible": False},
+                    {"input": "1 5 3 7 2\n9", "expected": "3 4", "visible": False},  # Fixed: 7+2=9, indices 3,4
                     {"input": "-1 -2 -3 -4 -5\n-8", "expected": "2 4", "visible": False},
                 ],
                 time_limit=2.0,

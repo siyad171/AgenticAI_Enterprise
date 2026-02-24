@@ -23,14 +23,9 @@ def show_candidate_portal():
         _show_mcq_test(agent, db)
     elif step == "mcq_result":
         _show_mcq_result(agent, db)
-    elif step == "technical_interview":
-        _show_technical_choice(agent, db)
-    elif step == "chat_interview":
+    elif step in ("technical_interview", "chat_interview"):
         from ui.chat_interview_ui import show_chat_interview
         show_chat_interview()
-    elif step == "quick_code_test":
-        from ui.technical_interview_ui import show_technical_interview
-        show_technical_interview()
     elif step == "psychometric":
         from ui.psychometric_ui import show_psychometric_assessment
         show_psychometric_assessment()
@@ -268,16 +263,4 @@ def _show_mcq_result(agent, db):
             st.rerun()
 
 
-def _show_technical_choice(agent, db):
-    """Let candidate choose technical interview mode"""
-    st.subheader("Step 3: Technical Interview")
-    mode = st.radio("Choose interview mode:",
-                    ["💬 Chat Interview (AI Interviewer)",
-                     "⚡ Quick Code Test"])
-    if st.button("Start", type="primary"):
-        if "Chat" in mode:
-            st.session_state.candidate_step = "chat_interview"
-            st.rerun()
-        else:
-            st.session_state.candidate_step = "quick_code_test"
-            st.rerun()
+# _show_technical_choice removed — candidates go directly to AI chat interview

@@ -67,10 +67,16 @@ def show_technical_interview():
         if st.button("▶️ Run Code", type="primary"):
             with st.spinner("Executing..."):
                 executor = CodeExecutor()
-                result = executor.execute_code(code, language)
+                # Use first example input as default stdin so code doesn't hit EOFError
+                default_stdin = ""
+                if prob.examples:
+                    default_stdin = prob.examples[0].get('input', '')
+                result = executor.execute_code(code, language, stdin=default_stdin)
                 if result.get('status') == 'success':
                     st.success("Output:")
                     st.code(result.get('output', 'No output'))
+                    if prob.examples:
+                        st.caption(f"Expected: {prob.examples[0].get('output', '')}")
                 else:
                     st.error(f"Error: {result.get('error', 'Unknown error')}")
 
@@ -81,8 +87,10 @@ def show_technical_interview():
                 executor = CodeExecutor()
                 test_cases = prob.test_cases if hasattr(prob, 'test_cases') else []
                 if test_cases:
-                    results = executor.run_test_cases(code, language, test_cases)
-                    passed = sum(1 for r in results if r.get('status') == 'passed')
+                    raw_results = executor.run_test_cases(code, language, test_cases)
+                    # run_test_cases returns a dict with 'test_results' list
+                    results = raw_results.get('test_results', []) if isinstance(raw_results, dict) else raw_results
+                    passed = sum(1 for r in results if isinstance(r, dict) and r.get('status') == 'passed')
                     total = len(results)
 
                     if passed == total:
@@ -91,11 +99,23 @@ def show_technical_interview():
                         st.warning(f"⚠️ {passed}/{total} tests passed")
 
                     for i, r in enumerate(results, 1):
+                        if not isinstance(r, dict):
+                            continue
                         icon = "✅" if r.get('status') == 'passed' else "❌"
                         with st.expander(f"{icon} Test {i}"):
-                            st.write(f"**Input:** {r.get('input', 'N/A')}")
-                            st.write(f"**Expected:** {r.get('expected', 'N/A')}")
-                            st.write(f"**Got:** {r.get('output', 'N/A')}")
+                            # Show all test details (no hidden tests in interview context)
+                            actual_input = r.get('input', 'N/A')
+                            actual_expected = r.get('expected', 'N/A')
+                            actual_output = r.get('actual', r.get('output', 'N/A'))
+                            if actual_input == 'Hidden' and hasattr(prob, 'test_cases') and i <= len(prob.test_cases):
+                                tc = prob.test_cases[i - 1]
+                                actual_input = tc.get('input', 'N/A')
+                                actual_expected = tc.get('expected', 'N/A')
+                            st.write(f"**Input:** {actual_input}")
+                            st.write(f"**Expected:** {actual_expected}")
+                            st.write(f"**Got:** {actual_output}")
+                            if r.get('time'):
+                                st.write(f"**Time:** {r.get('time', 0):.3f}s")
 
                     st.session_state.test_results = results
                 else:

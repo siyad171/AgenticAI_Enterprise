@@ -136,11 +136,12 @@ class CodeExecutor:
                     'time': result.get('time', 0), 'memory': result.get('memory', 0)
                 })
             else:
+                # For hidden tests in interview context: hide input/expected but SHOW actual output for debugging
                 results['test_results'].append({
                     'test_number': i+1, 'status': status,
                     'input': 'Hidden', 'expected': 'Hidden',
-                    'actual': 'Hidden' if status != 'passed' else expected,
-                    'error': result.get('error', '') if status == 'error' else '',
+                    'actual': actual,  # Show actual output so candidate can debug
+                    'error': result.get('error', ''),
                     'time': result.get('time', 0), 'memory': result.get('memory', 0),
                     'hidden': True
                 })

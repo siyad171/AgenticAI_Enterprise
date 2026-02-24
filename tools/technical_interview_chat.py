@@ -43,13 +43,15 @@ class TechnicalInterviewChat:
         self.problem_data = problem
         self.current_stage = self.STAGES['INTRODUCTION']
         prompt = (
-            f"You are a friendly technical interviewer.\n\n"
+            "You are a friendly technical interviewer speaking DIRECTLY to the candidate. "
+            "Do NOT give meta-commentary or instructions. Speak in first person TO the candidate.\n\n"
             f"Problem: {problem['title']} ({problem['difficulty']})\n"
             f"Description:\n{problem['description']}\n"
             f"Examples:\n{self._format_examples(problem['examples'])}\n\n"
-            "1. Brief warm greeting\n2. Introduce problem conversationally\n"
+            "Do exactly this:\n"
+            "1. Brief warm greeting\n2. Introduce the problem conversationally\n"
             "3. Show ONE example\n4. Ask if they have clarifying questions\n"
-            "Max 5 sentences. Be encouraging."
+            "Max 5 sentences. Be encouraging. Never say 'the candidate'."
         )
         response = self._call_llm(prompt, self.chat_model)
         self._add_to_history('assistant', response, 'introduction')
@@ -60,11 +62,18 @@ class TechnicalInterviewChat:
         self.current_stage = self.STAGES['CLARIFICATION']
         self._add_to_history('user', candidate_question, 'clarification')
         prompt = (
-            f'Candidate said: "{candidate_question}"\n\n'
+            "You ARE the technical interviewer speaking directly to the candidate. "
+            "Do NOT give meta-commentary, instructions to yourself, or suggest what to say. "
+            "Respond directly to the candidate in first person as the interviewer.\n\n"
             f"Problem:\n{self._get_problem_context()}\n"
             f"Recent conversation:\n{self._get_recent_conversation(5)}\n\n"
-            "If explaining approach → say 'Walk me through your solution step by step.'\n"
-            "If asking question → answer clearly (2-3 sentences max)."
+            f'The candidate just said: "{candidate_question}"\n\n'
+            "Rules:\n"
+            "- If the candidate asks a clarifying question → answer it directly (2-3 sentences).\n"
+            "- If the candidate starts explaining their approach → say 'Great, walk me through your solution step by step.'\n"
+            "- Always speak TO the candidate, never ABOUT the candidate.\n"
+            "- Never say 'the candidate' or 'you can respond with'.\n"
+            "- Max 3-4 sentences."
         )
         response = self._call_llm(prompt, self.chat_model)
         self._add_to_history('assistant', response, 'clarification')
@@ -116,14 +125,17 @@ class TechnicalInterviewChat:
                            test_results: List[Dict]) -> str:
         self.candidate_code = failing_code
         self._add_to_history('user', candidate_message, 'debugging')
-        failed = [t for t in test_results if t['status'] != 'passed']
-        passed = [t for t in test_results if t['status'] == 'passed']
+        # Safely filter test results (may be list of dicts or empty)
+        failed = [t for t in test_results if isinstance(t, dict) and t.get('status') != 'passed']
+        passed = [t for t in test_results if isinstance(t, dict) and t.get('status') == 'passed']
         prompt = (
+            "You are a technical interviewer speaking DIRECTLY to the candidate. "
+            "Never give meta-commentary. Speak in first person.\n\n"
             f"Problem: {self.problem_data['title']}\n"
             f"Code:\n```\n{failing_code}\n```\n"
             f"Passed: {len(passed)}, Failed: {len(failed)}\n"
             f"Failed examples:\n{self._format_failed_tests(failed[:2])}\n"
-            f'Candidate says: "{candidate_message}"\n\n'
+            f'The candidate says: "{candidate_message}"\n\n'
             "Guide them with Socratic questions. Don't give the answer. ≤4 sentences."
         )
         response = self._call_llm(prompt, self.chat_model)
