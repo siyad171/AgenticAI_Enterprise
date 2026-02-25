@@ -4,10 +4,20 @@ import datetime
 from ui.utils import logout
 
 
+def _count_new_candidates(db) -> int:
+    """Count candidates in 'Pending' or 'Test_Scheduled' status."""
+    return sum(1 for c in db.candidates.values()
+               if getattr(c, 'status', '') in ('Pending', 'Test_Scheduled', 'Accepted'))
+
+
 def show_admin_portal():
+    db = st.session_state.db
+    new_count = _count_new_candidates(db)
+    badge = f" ({new_count})" if new_count else ""
+
     st.sidebar.title("⚙️ Admin Portal")
     page = st.sidebar.radio("Menu", [
-        "🏠 Dashboard", "👥 Employees", "📋 Candidates",
+        "🏠 Dashboard", "👥 Employees", f"📋 Candidates{badge}",
         "📊 Audit Report", "⚙️ Settings",
         "🖥️ IT", "💰 Finance", "📜 Compliance",
         "🔄 Orchestrator"])
@@ -18,7 +28,7 @@ def show_admin_portal():
         _admin_dashboard()
     elif page == "👥 Employees":
         _employee_management()
-    elif page == "📋 Candidates":
+    elif page.startswith("📋 Candidates"):
         _candidate_review()
     elif page == "📊 Audit Report":
         _audit_report()
@@ -41,6 +51,13 @@ def show_admin_portal():
 def _admin_dashboard():
     db = st.session_state.db
     st.header("🏠 Admin Dashboard")
+
+    # Notification banner
+    new_count = _count_new_candidates(db)
+    if new_count:
+        st.warning(f"🔔 **{new_count} candidate(s)** awaiting review — "
+                   "go to **📋 Candidates** to view full reports.")
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Employees", len(db.employees))
     c2.metric("Candidates", len(db.candidates))
@@ -84,16 +101,28 @@ def _candidate_review():
     if not db.candidates:
         st.info("No candidates yet")
         return
-    for cid, cand in db.candidates.items():
-        with st.expander(f"{cand.name} — {cand.status}"):
-            st.write(f"**Position:** {cand.applied_position}")
-            st.write(f"**Skills:** {', '.join(cand.extracted_skills)}")
-            st.write(f"**Experience:** {cand.experience_years} years")
-            if cand.evaluation_result:
-                st.write(f"**Score:** {cand.evaluation_result.get('score', 'N/A')}%")
-            # View interview results
-            from ui.results_viewer_ui import show_candidate_results
-            show_candidate_results(cid)
+
+    # Candidate selector
+    cand_options = {f"{c.name} — {c.status} ({cid})": cid
+                    for cid, c in db.candidates.items()}
+    selected_label = st.selectbox("Select Candidate", list(cand_options.keys()))
+    cid = cand_options[selected_label]
+    candidate = db.get_candidate(cid)
+
+    # Quick info row
+    c1, c2, c3, c4 = st.columns(4)
+    c1.write(f"**Position:** {candidate.applied_position}")
+    c2.write(f"**Experience:** {candidate.experience_years} yrs")
+    c3.write(f"**Status:** {candidate.status}")
+    c4.write(f"**Skills:** {len(candidate.extracted_skills or [])}")
+
+    st.divider()
+
+    # Show full report
+    from ui.candidate_report_ui import show_candidate_report
+    llm_service = st.session_state.get("llm")
+    compare = st.checkbox("Compare with benchmark", value=True)
+    show_candidate_report(candidate, llm_service=llm_service, compare=compare)
 
 
 def _audit_report():
