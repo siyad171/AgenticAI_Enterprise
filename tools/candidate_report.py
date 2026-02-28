@@ -40,26 +40,25 @@ def _clamp(val, lo=0.0, hi=100.0):
 # ═══════════════════════════════════════════════════════════════════
 
 def _resume_score(candidate) -> Dict:
-    """Evaluate resume quality from DB candidate object."""
-    score = 0.0
+    """Evaluate resume quality from DB candidate object.
+    
+    Uses HR evaluation score as primary metric (already weighs skills, experience, education).
+    Other metrics kept as details for reference.
+    """
     details = {}
 
-    # Skill match
+    # Collect details for reference
     skills = candidate.extracted_skills if candidate.extracted_skills else []
     skill_count = len(skills)
     skill_score = min(skill_count / 8 * 100, 100)  # 8 skills = full marks
     details["skills_found"] = skill_count
     details["skill_score"] = round(skill_score, 1)
-    score += skill_score * 0.40
 
-    # Experience
     exp = candidate.experience_years or 0
     exp_score = min(exp / 5 * 100, 100)  # 5 years = full marks
     details["experience_years"] = exp
     details["experience_score"] = round(exp_score, 1)
-    score += exp_score * 0.30
 
-    # Education
     edu = (candidate.education or "").lower()
     edu_map = {"phd": 100, "master": 90, "bachelor": 75, "diploma": 50, "high school": 30}
     edu_score = 0
@@ -69,16 +68,13 @@ def _resume_score(candidate) -> Dict:
             break
     details["education"] = candidate.education
     details["education_score"] = edu_score
-    score += edu_score * 0.20
 
-    # Evaluation result from HR agent
+    # Use HR evaluation as primary score (already weighs skills 60%, experience 20%, education 20%)
     eval_result = candidate.evaluation_result or {}
-    eval_score = _clamp(_safe(eval_result.get("score"), 50))
-    details["hr_evaluation_score"] = eval_score
-    score += eval_score * 0.10
+    final = _clamp(_safe(eval_result.get("score"), 50))
+    details["hr_evaluation_score"] = final
 
-    final = round(_clamp(score), 1)
-    return {"score": final, "details": details}
+    return {"score": round(final, 1), "details": details}
 
 
 def _mcq_score(candidate) -> Dict:

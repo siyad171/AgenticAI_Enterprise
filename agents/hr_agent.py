@@ -297,11 +297,12 @@ class HRAgent(BaseAgent):
         required_edu_level = self._normalize_education_level(job_position.min_education)
         edu_met = candidate_edu_level >= required_edu_level
 
-        score = skill_pct
-        if criteria.get('experience_required', True) and not exp_met:
-            score *= 0.7
-        if criteria.get('education_required', True) and not edu_met:
-            score *= 0.8
+        # Weighted overall score: 60% skills, 20% experience, 20% education
+        exp_ratio = min(candidate.experience_years / job_position.min_experience, 1.0) if job_position.min_experience > 0 else 1.0
+        exp_score = exp_ratio * 100
+        edu_score = 100 if edu_met else (candidate_edu_level / max(required_edu_level, 1)) * 100
+
+        score = skill_pct * 0.6 + exp_score * 0.2 + edu_score * 0.2
 
         auto_thr = criteria.get('auto_accept_threshold', AUTO_ACCEPT_THRESHOLD)
         skill_thr = criteria.get('skill_match_threshold', SKILL_MATCH_THRESHOLD)
@@ -334,32 +335,52 @@ class HRAgent(BaseAgent):
     # ══════════════════════════════════════════════════════════════
     def parse_resume_text(self, resume_text: str) -> Dict:
         if self.llm and self.llm.client:
+            prompt = ""
+            resp = ""
             try:
                 prompt = (
-                    "Analyze this resume and extract JSON:\n\n"
+                    "Analyze this resume and extract ONLY a single JSON object. "
+                    "Do NOT include any explanation, code, or text outside the JSON.\n\n"
                     f"{resume_text[:3000]}\n\n"
-                    'Return: {"skills":["..."],"experience_years":<int>,'
-                    '"education":"Bachelor\'s Degree|Master\'s Degree|PhD|Diploma|High School|Not Specified"}'
+                    'Return ONLY: {"skills":["..."],"experience_years":<int>,'
+                    '"education":"Bachelor\'s Degree|Master\'s Degree|PhD|Diploma|High School|Not Specified"}\n'
+                    "IMPORTANT: education MUST be exactly one of the values listed above. "
+                    "Return ONLY the JSON object, nothing else."
                 )
                 resp = self.llm.generate_response(
-                    prompt, "Expert resume parser. Return valid JSON only.",
+                    prompt, "Expert resume parser. Return ONLY valid JSON, no explanation or code.",
                     include_employee_data=False
                 )
-                # Save LLM response for debugging
-                self._save_resume_parse_log(resume_text, prompt, resp)
                 
-                m = re.search(r'\{[\s\S]*\}', resp)
+                # Extract first JSON object only (non-greedy to avoid capturing extra content)
+                m = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', resp)
                 if m:
                     data = json.loads(m.group(0))
+                    # Normalize education value
+                    raw_edu = data.get("education", "Not Specified")
+                    data["education"] = self._normalize_education_label(raw_edu)
+                    
+                    self._save_resume_parse_log(resume_text, prompt, resp)
                     return {"skills": data.get("skills", []),
                             "experience_years": int(data.get("experience_years", 0)),
-                            "education": data.get("education", "Not Specified")}
+                            "education": data["education"]}
             except Exception as e:
-                # Also log parse failures
-                self._save_resume_parse_log(resume_text, prompt if 'prompt' in locals() else "", 
-                                           resp if 'resp' in locals() else "", 
-                                           error=str(e))
+                self._save_resume_parse_log(resume_text, prompt, resp, error=str(e))
         return self._fallback_parse(resume_text)
+
+    def _normalize_education_label(self, raw: str) -> str:
+        """Map any education string to a standard label."""
+        r = raw.lower()
+        for label, keys in [
+            ("PhD", ["phd", "ph.d", "doctorate"]),
+            ("Master's Degree", ["master", "msc", "mba", "m.tech", "m.e"]),
+            ("Bachelor's Degree", ["bachelor", "bsc", "b.tech", "b.e", "b.a"]),
+            ("Diploma", ["diploma"]),
+            ("High School", ["high school"]),
+        ]:
+            if any(k in r for k in keys):
+                return label
+        return raw  # Return as-is if already a valid label
 
     def _save_resume_parse_log(self, resume_text: str, prompt: str, llm_response: str, error: str = None):
         """Save LLM resume parsing response to JSON file for debugging"""
