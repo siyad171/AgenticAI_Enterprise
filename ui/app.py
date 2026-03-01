@@ -27,6 +27,7 @@ from core.database import Database
 from core.llm_service import LLMService
 from core.event_bus import EventBus
 from core.orchestrator import Orchestrator
+from core.goal_tracker import GoalTracker
 from agents.hr_agent import HRAgent
 from agents.it_agent import ITAgent
 from agents.finance_agent import FinanceAgent
@@ -41,16 +42,24 @@ if 'llm' not in st.session_state:
 if 'event_bus' not in st.session_state:
     st.session_state.event_bus = EventBus()
 
+if 'goal_tracker' not in st.session_state:
+    st.session_state.goal_tracker = GoalTracker()
+
 if 'agents' not in st.session_state:
     db = st.session_state.db
     llm = st.session_state.llm
     bus = st.session_state.event_bus
-    st.session_state.agents = {
+    gt = st.session_state.goal_tracker
+    agents = {
         'hr': HRAgent(db, llm, bus),
         'it': ITAgent(db, llm, bus),
         'finance': FinanceAgent(db, llm, bus),
         'compliance': ComplianceAgent(db, llm, bus),
     }
+    # Wire GoalTracker into all agents
+    for agent in agents.values():
+        agent.set_goal_tracker(gt)
+    st.session_state.agents = agents
 
 if 'orchestrator' not in st.session_state:
     st.session_state.orchestrator = Orchestrator(

@@ -30,12 +30,14 @@ class LLMService:
         prompt: str,
         system_prompt: str = "",
         include_employee_data: bool = False,
-        model: str = None
+        model: str = None,
+        max_tokens: int = None
     ) -> str:
         """
         General-purpose LLM call.
         - model: defaults to chat_model. Pass analysis_model for deep tasks.
         - include_employee_data: appends DB employee summary to system prompt.
+        - max_tokens: override default token limit (useful for agentic reasoning).
         """
         if not self.client:
             return self._fallback_response(prompt)
@@ -57,7 +59,7 @@ class LLMService:
                 model=model or self.chat_model,
                 messages=messages,
                 temperature=LLM_TEMPERATURE,
-                max_tokens=LLM_MAX_TOKENS,
+                max_tokens=max_tokens or LLM_MAX_TOKENS,
             )
             return response.choices[0].message.content
 
@@ -72,9 +74,10 @@ class LLMService:
     def generate_json_response(
         self, prompt: str, system_prompt: str = ""
     ) -> str:
-        """Use the deeper analysis model. Caller parses JSON from response."""
+        """Use the deeper analysis model with higher token limit for agentic reasoning."""
         return self.generate_response(
-            prompt, system_prompt, model=self.analysis_model
+            prompt, system_prompt, model=self.analysis_model,
+            max_tokens=1500
         )
 
     def chat_with_history(

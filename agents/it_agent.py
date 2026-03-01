@@ -12,6 +12,139 @@ class ITAgent(BaseAgent):
     def __init__(self, db, llm_service, event_bus=None):
         super().__init__(agent_name="IT Agent", database=db, llm_service=llm_service, event_bus=event_bus)
         self.email = EmailService(llm_service)
+        self._register_tools()
+
+    def _register_tools(self):
+        """Register all IT methods as autonomous tools."""
+        self.register_tool(
+            name="create_ticket",
+            description="Create an IT support ticket for hardware, software, network, or security issues. Uses LLM to suggest resolution.",
+            parameters={
+                "employee_id": "str — Employee ID reporting the issue",
+                "category": "str — One of: Hardware, Software, Network, Security, Other",
+                "description": "str — Detailed description of the issue",
+                "priority": "str — One of: Low, Medium, High, Critical (default: Medium)"
+            },
+            function=self.create_ticket,
+            requires_employee_id=True
+        )
+        self.register_tool(
+            name="resolve_ticket",
+            description="Resolve an open IT ticket with a resolution description.",
+            parameters={
+                "ticket_id": "str — Ticket ID to resolve (e.g. TKT...)",
+                "resolution": "str — Description of how the issue was resolved",
+                "resolved_by": "str — Who resolved it (default: IT Agent)"
+            },
+            function=self.resolve_ticket
+        )
+        self.register_tool(
+            name="get_ticket_status",
+            description="Check the current status and details of an IT ticket.",
+            parameters={
+                "ticket_id": "str — Ticket ID to check"
+            },
+            function=self.get_ticket_status
+        )
+        self.register_tool(
+            name="grant_access",
+            description="Grant an employee access to a system (Email, VPN, JIRA, Slack, GitHub, AWS Console).",
+            parameters={
+                "employee_id": "str — Employee ID to grant access to",
+                "system": "str — System name (e.g. Email, VPN, JIRA, Slack, GitHub, AWS Console)",
+                "access_level": "str — One of: Standard, Admin, Read-Only (default: Standard)",
+                "approved_by": "str — Who approved (default: IT Admin)"
+            },
+            function=self.grant_access,
+            requires_employee_id=True
+        )
+        self.register_tool(
+            name="revoke_access",
+            description="Revoke an employee's access to a specific system.",
+            parameters={
+                "employee_id": "str — Employee ID",
+                "system": "str — System to revoke access from",
+                "reason": "str — Reason for revocation"
+            },
+            function=self.revoke_access,
+            requires_employee_id=True
+        )
+        self.register_tool(
+            name="manage_software_license",
+            description="Assign or release a software license for an employee.",
+            parameters={
+                "action": "str — One of: assign, release",
+                "software": "str — Software name",
+                "employee_id": "str — Employee ID (required for assign)"
+            },
+            function=self.manage_software_license
+        )
+        self.register_tool(
+            name="track_asset",
+            description="Track IT assets. Search by asset ID or employee ID to see assigned hardware/devices.",
+            parameters={
+                "asset_id": "str — Asset ID to look up (optional)",
+                "employee_id": "str — Employee ID to find their assets (optional)"
+            },
+            function=self.track_asset
+        )
+        self.register_tool(
+            name="get_open_tickets_summary",
+            description="Get a summary of all open IT tickets — useful for status reports and identifying patterns.",
+            parameters={},
+            function=self._get_open_tickets_summary
+        )
+
+    def _get_open_tickets_summary(self) -> Dict:
+        """Tool: Summarize all open tickets."""
+        tickets = getattr(self.db, 'it_tickets', {})
+        open_tickets = [
+            {"ticket_id": t.ticket_id, "category": t.category,
+             "priority": t.priority, "employee_id": t.employee_id,
+             "description": t.description, "created": t.created_date}
+            for t in tickets.values() if t.status == "Open"
+        ]
+        by_priority = {}
+        by_category = {}
+        for t in open_tickets:
+            by_priority[t["priority"]] = by_priority.get(t["priority"], 0) + 1
+            by_category[t["category"]] = by_category.get(t["category"], 0) + 1
+        return {
+            "status": "success",
+            "total_open": len(open_tickets),
+            "by_priority": by_priority,
+            "by_category": by_category,
+            "tickets": open_tickets
+        }
+
+    def _get_domain_context(self, user_message: str, context: Dict) -> Dict:
+        """Add IT-specific context for the LLM reasoning."""
+        domain = {}
+        msg_lower = user_message.lower()
+
+        # Add open tickets summary for ticket-related queries
+        if any(w in msg_lower for w in ["ticket", "issue", "problem", "crash", "broken",
+                                         "not working", "error", "help", "support", "fix"]):
+            tickets = getattr(self.db, 'it_tickets', {})
+            open_count = sum(1 for t in tickets.values() if t.status == "Open")
+            domain["open_tickets_count"] = open_count
+            domain["ticket_categories"] = ["Hardware", "Software", "Network", "Security", "Other"]
+
+        if any(w in msg_lower for w in ["access", "permission", "grant", "revoke", "login"]):
+            domain["available_systems"] = ["Email", "VPN", "JIRA", "Slack", "GitHub", "AWS Console"]
+            domain["access_levels"] = ["Standard", "Admin", "Read-Only"]
+
+        if any(w in msg_lower for w in ["license", "software", "install"]):
+            from core.config import APPROVED_SOFTWARE
+            domain["approved_software"] = APPROVED_SOFTWARE
+
+        # Employee lookup
+        if self.db.employees:
+            domain["known_employees"] = {
+                eid: {"name": e.name, "department": e.department}
+                for eid, e in self.db.employees.items()
+            }
+        return domain
 
     def get_capabilities(self) -> List[str]:
         return [
@@ -33,9 +166,11 @@ class ITAgent(BaseAgent):
                       description: str, priority: str = "Medium") -> Dict:
         from core.database import ITTicket
         ticket_id = f"TKT{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+        # Generate a short subject line from the description
+        subject = description[:80] if description else f"{category} issue"
         ticket = ITTicket(
             ticket_id=ticket_id, employee_id=employee_id,
-            category=category, description=description,
+            category=category, subject=subject, description=description,
             priority=priority, status="Open",
             created_date=datetime.datetime.now().isoformat()
         )
@@ -98,9 +233,10 @@ class ITAgent(BaseAgent):
         from core.database import AccessRecord
         record = AccessRecord(
             record_id=f"ACC{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
-            employee_id=employee_id, system=system,
-            access_level=access_level, granted_date=datetime.datetime.now().isoformat(),
-            status="Active", approved_by=approved_by
+            employee_id=employee_id, systems=[system],
+            role_permissions=access_level,
+            provisioned_date=datetime.datetime.now().isoformat(),
+            status="Active"
         )
         self.db.add_access_record(record)
         result = {"status": "success", "record_id": record.record_id,
@@ -114,7 +250,7 @@ class ITAgent(BaseAgent):
         records = self.db.get_employee_access(employee_id)
         revoked = []
         for r in records:
-            if r.system == system and r.status == "Active":
+            if system in getattr(r, 'systems', []) and r.status == "Active":
                 r.status = "Revoked"
                 r.revoked_date = datetime.datetime.now().isoformat()
                 revoked.append(r.record_id)
@@ -171,3 +307,15 @@ class ITAgent(BaseAgent):
         self.create_ticket("SYSTEM", "Security",
                            f"Security incident: {data.get('description','')}",
                            priority="Critical")
+
+    # ── Goal Tracking ─────────────────────────────────────────────
+    def _update_goals(self, actions_taken: list):
+        """Update IT KPIs after agentic actions."""
+        if not self.goal_tracker:
+            return
+        for action in actions_taken:
+            if action.get("success") and action["tool"] == "resolve_ticket":
+                # Count open tickets to update KPI
+                tickets = getattr(self.db, 'it_tickets', {})
+                open_count = sum(1 for t in tickets.values() if t.status == "Open")
+                self.goal_tracker.record_metric("IT Agent", "Open tickets", open_count)

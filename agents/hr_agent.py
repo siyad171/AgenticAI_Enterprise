@@ -23,6 +23,117 @@ class HRAgent(BaseAgent):
     def __init__(self, db, llm_service, event_bus=None):
         super().__init__(agent_name="HR Agent", database=db, llm_service=llm_service, event_bus=event_bus)
         self.email = EmailService(llm_service)
+        self._register_tools()
+
+    def _register_tools(self):
+        """Register all HR methods as autonomous tools."""
+        self.register_tool(
+            name="process_leave_request",
+            description="Process an employee's leave request. Validates balance, checks date conflicts, auto-approves ≤10 days, sends email notification.",
+            parameters={
+                "employee_id": "str — Employee ID (e.g. EMP001)",
+                "leave_type": "str — One of: Casual Leave, Sick Leave, Annual Leave, Unpaid Leave",
+                "start_date": "str — Start date in YYYY-MM-DD format",
+                "end_date": "str — End date in YYYY-MM-DD format",
+                "reason": "str — Reason for leave"
+            },
+            function=self.process_leave_request,
+            requires_employee_id=True
+        )
+        self.register_tool(
+            name="handle_employee_onboarding",
+            description="Onboard a new employee. Creates profile, generates credentials, triggers IT/Finance/Compliance setup via EventBus.",
+            parameters={
+                "name": "str — Full name",
+                "email": "str — Email address",
+                "department": "str — Department name",
+                "position": "str — Job title",
+                "join_date": "str — Join date in YYYY-MM-DD format"
+            },
+            function=self.handle_employee_onboarding
+        )
+        self.register_tool(
+            name="ask_hr_policy_question",
+            description="Answer questions about company HR policies (leave, onboarding, working hours, code of conduct, etc.) using the policy database.",
+            parameters={
+                "question": "str — The policy question to answer",
+                "employee_id": "str — Employee ID asking the question (optional, default GUEST)"
+            },
+            function=self.ask_hr_policy_question
+        )
+        self.register_tool(
+            name="generate_audit_report",
+            description="Generate an HR audit report for a given date range. Shows leave requests, onboarding, policy questions, and compliance issues.",
+            parameters={
+                "start_date": "str — Start date YYYY-MM-DD (optional, defaults to 30 days ago)",
+                "end_date": "str — End date YYYY-MM-DD (optional, defaults to today)"
+            },
+            function=self.generate_audit_report
+        )
+        self.register_tool(
+            name="get_employee_info",
+            description="Look up an employee's details including name, department, position, email, and leave balance.",
+            parameters={
+                "employee_id": "str — Employee ID (e.g. EMP001)"
+            },
+            function=self._get_employee_info
+        )
+        self.register_tool(
+            name="get_leave_history",
+            description="Get an employee's leave request history showing all past leave requests and their statuses.",
+            parameters={
+                "employee_id": "str — Employee ID"
+            },
+            function=self._get_leave_history
+        )
+
+    def _get_employee_info(self, employee_id: str) -> Dict:
+        """Tool: Look up employee details."""
+        emp = self.db.get_employee(employee_id)
+        if not emp:
+            return {"status": "error", "message": f"Employee {employee_id} not found"}
+        return {
+            "status": "success",
+            "employee": {
+                "id": emp.employee_id, "name": emp.name, "email": emp.email,
+                "department": emp.department, "position": emp.position,
+                "join_date": emp.join_date,
+                "leave_balance": emp.leave_balance,
+            }
+        }
+
+    def _get_leave_history(self, employee_id: str) -> Dict:
+        """Tool: Get leave request history for an employee."""
+        requests = [
+            {"request_id": r.request_id, "type": r.leave_type,
+             "start": r.start_date, "end": r.end_date, "days": r.days,
+             "status": r.status, "reason": r.reason}
+            for r in self.db.leave_requests.values()
+            if r.employee_id == employee_id
+        ]
+        return {"status": "success", "employee_id": employee_id,
+                "leave_requests": requests, "total": len(requests)}
+
+    def _get_domain_context(self, user_message: str, context: Dict) -> Dict:
+        """Add HR-specific context for the LLM reasoning."""
+        domain = {}
+        # Add leave policies summary
+        msg_lower = user_message.lower()
+        if any(w in msg_lower for w in ["leave", "vacation", "day off", "time off", "absent"]):
+            domain["leave_policies"] = {
+                "auto_approve_max_days": 10,
+                "types": ["Casual Leave", "Sick Leave", "Annual Leave", "Unpaid Leave"],
+                "default_balances": {"Casual Leave": 12, "Sick Leave": 15, "Annual Leave": 20}
+            }
+        if any(w in msg_lower for w in ["onboard", "new hire", "new employee", "joining"]):
+            domain["onboarding_info"] = "Triggers IT access, Finance payroll, and Compliance training automatically"
+        # Provide employee list for name resolution
+        if self.db.employees:
+            domain["known_employees"] = {
+                eid: {"name": e.name, "department": e.department}
+                for eid, e in self.db.employees.items()
+            }
+        return domain
 
     # ── BaseAgent abstract ────────────────────────────────────────
     def get_capabilities(self) -> List[str]:
@@ -481,3 +592,15 @@ class HRAgent(BaseAgent):
             candidate_email, candidate_name, passed,
             test_score, position, username, password
         )
+
+    # ── Goal Tracking ─────────────────────────────────────────────
+    def _update_goals(self, actions_taken: list):
+        """Update HR KPIs after agentic actions."""
+        if not self.goal_tracker:
+            return
+        for action in actions_taken:
+            if action.get("success") and action["tool"] == "process_leave_request":
+                # Track leave processing metrics
+                pass  # GoalTracker already has the KPIs, orchestrator updates
+            elif action.get("success") and action["tool"] == "handle_employee_onboarding":
+                self.goal_tracker.record_metric("HR Agent", "Time-to-hire", 1)

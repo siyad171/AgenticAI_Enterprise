@@ -1,0 +1,8 @@
+{
+  "timestamp": "2026-03-01T15:20:23.915983",
+  "resume_text_preview": "\n    John Smith\n    Python Developer with 5 years experience\n    Skills: Python, Django, PostgreSQL, Docker\n    Education: BSc Computer Science\n    ",
+  "resume_text_length": 148,
+  "prompt_sent": "Analyze this resume and extract ONLY a single JSON object. Do NOT include any explanation, code, or text outside the JSON.\n\n\n    John Smith\n    Python Developer with 5 years experience\n    Skills: Python, Django, PostgreSQL, Docker\n    Education: BSc Computer Science\n    \n\nReturn ONLY: {\"skills\":[\"...\"],\"experience_years\":<int>,\"education\":\"Bachelor's Degree|Master's Degree|PhD|Diploma|High School|Not Specified\"}\nIMPORTANT: education MUST be exactly one of the values listed above. Return ONLY the JSON object, nothing else.",
+  "llm_response": "{\"skills\":[\"Python\", \"Django\", \"PostgreSQL\", \"Docker\"],\"experience_years\":5,\"education\":\"Bachelor's Degree\"}",
+  "error": null
+}

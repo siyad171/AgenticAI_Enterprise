@@ -3,9 +3,11 @@ core/orchestrator.py — Multi-agent workflow coordination
 
 Agentic AI Features:
 - Multi-Agent Coordination (workflows spanning 2-4 agents)
-- Task Routing (LLM classifies which agent handles a request)
+- Intelligent Chat Routing (LLM classifies which agent handles a request)
+- Agentic Delegation (routes chat to agent's process_request ReAct loop)
 - Escalation (confidence < threshold → human review)
 """
+import json, re
 from datetime import datetime
 from typing import Dict, List, Optional
 from core.base_agent import BaseAgent
@@ -14,7 +16,7 @@ from core.config import ESCALATION_CONFIDENCE_THRESHOLD
 
 class Orchestrator:
 
-    def __init__(self, agents: Dict[str, BaseAgent], event_bus, llm_service):
+    def __init__(self, agents: Dict[str, BaseAgent], llm_service, event_bus):
         """
         agents: {"hr": HRAgent, "it": ITAgent, "finance": FinanceAgent, "compliance": ComplianceAgent}
         """
@@ -25,30 +27,73 @@ class Orchestrator:
         self.completed_workflows: List[Dict] = []
         self.escalation_queue: List[Dict] = []
 
+    # ─────────── Agentic Chat: Route & Delegate ───────────
+
+    def chat(self, user_message: str, context: Dict = None) -> Dict:
+        """
+        Main agentic entry point for the unified chat.
+        Routes the message to the right agent, which then runs its ReAct loop.
+        """
+        context = context or {}
+        # Step 1: Route to the right agent
+        routing = self.route_task(user_message, context)
+        agent_key = routing.get("agent", "hr")
+        agent = self.agents.get(agent_key)
+
+        if not agent:
+            return {
+                "response": "I couldn't determine which department can help with this. Could you provide more details?",
+                "agent": "unknown",
+                "routing_reasoning": routing.get("reasoning", "")
+            }
+
+        # Step 2: Delegate to the agent's agentic process_request
+        result = agent.process_request(user_message, context)
+        result["agent"] = agent_key
+        result["agent_name"] = agent.agent_name
+        result["routing_reasoning"] = routing.get("reasoning", "")
+        return result
+
     # ─────────── Task Routing ───────────
 
     def route_task(self, task_description: str, context: Dict = None) -> Dict:
         """Use LLM to determine which agent should handle a task."""
-        agent_list = ", ".join(
-            f"{name} ({agent.agent_name}): {', '.join(agent.get_capabilities())}"
+        agent_list = "\n".join(
+            f"- {name}: {', '.join(agent.get_capabilities())}"
             for name, agent in self.agents.items()
         )
 
-        prompt = f"""You are a task router. Given this request, decide which agent should handle it.
+        prompt = f"""You are a task router for an enterprise AI system. Route this request to the right agent.
 
 Available Agents:
 {agent_list}
 
-Task: {task_description}
+User Request: "{task_description}"
 
-Return the agent key (hr, it, finance, or compliance) and brief reasoning.
-Format: agent_key | reasoning
+Return ONLY a JSON object: {{"agent": "hr|it|finance|compliance", "reasoning": "brief reason"}}
 """
-        response = self.llm.generate_response(prompt)
-        # Parse — simple extraction
-        for key in self.agents:
-            if key in response.lower():
-                return {"agent": key, "reasoning": response}
+        try:
+            response = self.llm.generate_json_response(prompt)
+            m = re.search(r'\{[^{}]*\}', response)
+            if m:
+                data = json.loads(m.group(0))
+                agent_key = data.get("agent", "").lower()
+                if agent_key in self.agents:
+                    return {"agent": agent_key, "reasoning": data.get("reasoning", "")}
+        except Exception:
+            pass
+
+        # Fallback: keyword-based routing
+        task_lower = task_description.lower()
+        if any(w in task_lower for w in ["leave", "onboard", "hire", "policy", "employee", "vacation", "absent"]):
+            return {"agent": "hr", "reasoning": "Keyword match: HR-related request"}
+        if any(w in task_lower for w in ["ticket", "access", "software", "hardware", "vpn", "crash", "error", "network", "password"]):
+            return {"agent": "it", "reasoning": "Keyword match: IT-related request"}
+        if any(w in task_lower for w in ["expense", "budget", "payroll", "salary", "reimburse", "payment"]):
+            return {"agent": "finance", "reasoning": "Keyword match: Finance-related request"}
+        if any(w in task_lower for w in ["compliance", "violation", "audit", "training", "regulation"]):
+            return {"agent": "compliance", "reasoning": "Keyword match: Compliance-related request"}
+
         return {"agent": "hr", "reasoning": "Default routing to HR"}
 
     # ─────────── Workflow Execution ───────────

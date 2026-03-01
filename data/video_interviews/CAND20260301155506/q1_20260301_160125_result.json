@@ -1,0 +1,165 @@
+{
+  "question": "Tell us about yourself and explain why you're interested in this role.",
+  "question_id": "VQ_01",
+  "audio_file": "C:\\Users\\KALLAI\\Desktop\\Github clone\\Updated\\AgenticAI_Enterprise\\data\\video_interviews\\CAND20260301155506\\q1_20260301_160125.wav",
+  "video_file": "C:\\Users\\KALLAI\\Desktop\\Github clone\\Updated\\AgenticAI_Enterprise\\data\\video_interviews\\CAND20260301155506\\q1_20260301_160125.avi",
+  "duration_seconds": 14.8,
+  "transcript": "Hello, my name is Chippin Caldery, and I'm a commentator, and I'm a doctor. I'm a member of the country, and I think you can offer a better view. I'm your favorite mission. Yeah.",
+  "emotions": {
+    "available": true,
+    "timeline": [
+      {
+        "second": 1,
+        "emotion": "neutral",
+        "scores": {
+          "angry": 0.35,
+          "disgust": 0.0,
+          "fear": 0.03,
+          "happy": 0.03,
+          "sad": 0.18,
+          "surprise": 0.0,
+          "neutral": 99.41
+        }
+      },
+      {
+        "second": 2,
+        "emotion": "sad",
+        "scores": {
+          "angry": 0.0,
+          "disgust": 0.0,
+          "fear": 0.24,
+          "happy": 0.0,
+          "sad": 99.76,
+          "surprise": 0.0,
+          "neutral": 0.0
+        }
+      },
+      {
+        "second": 3,
+        "emotion": "sad",
+        "scores": {
+          "angry": 0.0,
+          "disgust": 0.0,
+          "fear": 0.51,
+          "happy": 0.0,
+          "sad": 99.49,
+          "surprise": 0.0,
+          "neutral": 0.0
+        }
+      },
+      {
+        "second": 4,
+        "emotion": "sad",
+        "scores": {
+          "angry": 0.0,
+          "disgust": 0.0,
+          "fear": 0.08,
+          "happy": 0.0,
+          "sad": 99.92,
+          "surprise": 0.0,
+          "neutral": 0.0
+        }
+      },
+      {
+        "second": 5,
+        "emotion": "sad",
+        "scores": {
+          "angry": 0.0,
+          "disgust": 0.0,
+          "fear": 0.18,
+          "happy": 0.0,
+          "sad": 99.82,
+          "surprise": 0.0,
+          "neutral": 0.0
+        }
+      },
+      {
+        "second": 6,
+        "emotion": "sad",
+        "scores": {
+          "angry": 0.0,
+          "disgust": 0.0,
+          "fear": 0.01,
+          "happy": 0.0,
+          "sad": 99.99,
+          "surprise": 0.0,
+          "neutral": 0.0
+        }
+      },
+      {
+        "second": 7,
+        "emotion": "sad",
+        "scores": {
+          "angry": 0.0,
+          "disgust": 0.0,
+          "fear": 0.35,
+          "happy": 0.0,
+          "sad": 99.65,
+          "surprise": 0.0,
+          "neutral": 0.0
+        }
+      },
+      {
+        "second": 8,
+        "emotion": "neutral",
+        "scores": {
+          "angry": 7.43,
+          "disgust": 0.0,
+          "fear": 0.57,
+          "happy": 0.24,
+          "sad": 4.78,
+          "surprise": 0.03,
+          "neutral": 86.95
+        }
+      },
+      {
+        "second": 9,
+        "emotion": "sad",
+        "scores": {
+          "angry": 0.0,
+          "disgust": 0.0,
+          "fear": 0.18,
+          "happy": 0.0,
+          "sad": 99.82,
+          "surprise": 0.0,
+          "neutral": 0.0
+        }
+      },
+      {
+        "second": 10,
+        "emotion": "sad",
+        "scores": {
+          "angry": 0.0,
+          "disgust": 0.0,
+          "fear": 0.0,
+          "happy": 0.0,
+          "sad": 100.0,
+          "surprise": 0.0,
+          "neutral": 0.0
+        }
+      }
+    ],
+    "distribution": {
+      "neutral": 2,
+      "sad": 8
+    },
+    "positivity": 20.0,
+    "nervousness": 80.0,
+    "confidence": 20.0,
+    "frames_analyzed": 10
+  },
+  "evaluation": {
+    "criteria_scores": {
+      "communication": 20,
+      "enthusiasm": 40,
+      "relevance": 10,
+      "clarity": 10
+    },
+    "overall_score": 20,
+    "feedback": "The candidate's response lacked coherence and failed to provide relevant information about their qualifications or interest in the role. To improve, the candidate should focus on clearly articulating their skills and experiences. Additionally, they should demonstrate a better understanding of the position and its requirements.",
+    "recommendation": "No Hire"
+  },
+  "final_score": 20.0,
+  "recommendation": "No Hire",
+  "timestamp": "2026-03-01T16:01:35.405680"
+}
