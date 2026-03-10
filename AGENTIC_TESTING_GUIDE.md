@@ -20,17 +20,22 @@ streamlit run ui/app.py
 
 ---
 
-## Testing the HR Agent (Employee Portal)
+## Testing the Unified AI Assistant (Employee Portal)
+
+The Employee Portal now has a **Unified AI Assistant** powered by the Orchestrator.
+Instead of only handling HR queries, it **intelligently routes** requests to the correct agent
+(HR, IT, Finance, Compliance) and shows a **live Agent Planning checklist** so you can see
+exactly how the agent thinks, plans, and acts.
 
 ### Login
 - **Username:** `john` | **Password:** `john123` (Employee role)
 
 ### Where to Test
-- Sidebar → **💬 HR Assistant**
+- Sidebar → **🤖 AI Assistant**
 
 ---
 
-### Test 1: Leave Request via Natural Language
+### Test 1: HR Routing — Leave Request
 
 **Type this in the chat:**
 ```
@@ -39,34 +44,79 @@ I want to take casual leave from 2026-03-10 to 2026-03-12 for a family function
 
 **What to Expect:**
 - 🤖 Agent shows "Thinking..." spinner
-- Agent **reasons**: identifies this as a leave request, extracts dates, leave type, and reason
-- Agent **acts**: calls `process_leave_request` tool internally
+- **Agent badge** appears: `Handled by: 🏥 HR Agent`
+- **🧠 Agent Planning** checklist (expanded) shows:
+  - ✅ **Routing** — Routed to 🏥 HR Agent
+  - ✅ **Perceiving** — Employee: John, Dept: Engineering
+  - ✅ **Planning** — Tools: process_leave_request (confidence: 90%)
+  - ✅ **Executing** — process_leave_request → Approved
+  - ✅ **Evaluating** — Generating response (confidence: 90%)
 - Agent **responds**: tells you the leave is approved (3 days ≤ 10 day auto-approve limit)
-- You can expand **🧠 Agent Reasoning** to see the full reasoning chain
+- You can expand **💭 Reasoning** to see the full reasoning chain
 - You can expand **⚡ Actions Taken** to see which tools were called
 
 **Expected Result:**
 - Leave status: **Approved** (3 days, auto-approved)
 - Confidence: ~0.90–0.95
-- Actions: `process_leave_request ✅`
+- Routing: HR Agent
+- Planning checklist: all ✅
 
 ---
 
-### Test 2: Leave Request That Needs Approval
+### Test 2: IT Routing — Laptop Issue
 
 **Type:**
 ```
-I need annual leave from 2026-03-05 to 2026-03-25 for international travel
+My laptop is not charging and the screen flickers sometimes
 ```
 
 **What to Expect:**
-- Agent reasons that 21 days > 10 day limit → requires manager approval
-- Leave status: **Pending** (requires manager approval)
-- Agent explains the policy in its response
+- **Agent badge**: `Handled by: 🔧 IT Agent`
+- **🧠 Agent Planning** shows:
+  - ✅ **Routing** — Routed to 🔧 IT Agent
+  - ✅ **Perceiving** — Employee: John, Dept: Engineering
+  - ✅ **Planning** — Tools: create_ticket (confidence: ~85%)
+  - ✅ **Executing** — create_ticket → Ticket TKT... created
+  - ✅ **Evaluating** — Generating response
+- Agent creates an IT support ticket and gives you a ticket ID
+- Resolution suggestions from the LLM (e.g., check charger, run diagnostics)
+
+**Expected Result:**
+- Ticket created with category **Hardware**, priority **Medium** or **High**
+- Routing: IT Agent
+- Planning checklist: all ✅
 
 ---
 
-### Test 3: Policy Question (No Tool Needed)
+### Test 3: IT Routing — Access Request
+
+**Type:**
+```
+I need VPN access for remote work
+```
+
+**What to Expect:**
+- **Agent badge**: `Handled by: 🔧 IT Agent`
+- Agent calls `grant_access` tool with system=VPN
+- Planning checklist shows routing to IT, then grant_access execution
+
+---
+
+### Test 4: IT Routing — Ticket Status Check
+
+**Type (use a ticket ID from Test 2):**
+```
+Check the status of my ticket TKT20260309...
+```
+
+**What to Expect:**
+- Routes to IT Agent
+- Calls `get_ticket_status` tool
+- Returns ticket details (status, category, priority, description)
+
+---
+
+### Test 5: HR Routing — Policy Question
 
 **Type:**
 ```
@@ -74,13 +124,14 @@ What is the company's remote work policy?
 ```
 
 **What to Expect:**
-- Agent may call `ask_hr_policy_question` tool, OR answer directly from context
-- Responds with policy details about remote work (up to 3 days/week)
-- No leave processing happens — agent is smart enough to know this is just a question
+- **Agent badge**: `Handled by: 🏥 HR Agent`
+- Routes to HR (policy-related keyword)
+- Agent may call `ask_hr_policy_question` tool OR answer directly
+- Planning shows: Routing → HR, Perceiving, Planning (possibly no_tool_needed), Evaluating
 
 ---
 
-### Test 4: Employee Info Lookup
+### Test 6: HR Routing — Leave Balance
 
 **Type:**
 ```
@@ -88,26 +139,28 @@ Show me my leave balance
 ```
 
 **What to Expect:**
-- Agent calls `get_employee_info` tool
-- Returns your current leave balances (Casual: 12, Sick: 15, Annual: 20 initially)
-- If you already took leave in Test 1, casual balance will be reduced
+- Routes to HR Agent
+- Returns your current leave balances
+- If you took leave in Test 1, casual balance will be reduced
 
 ---
 
-### Test 5: Leave History
+### Test 7: Leave Request That Needs Approval
 
 **Type:**
 ```
-Show me all my past leave requests
+I need annual leave from 2026-03-05 to 2026-03-25 for international travel
 ```
 
 **What to Expect:**
-- Agent calls `get_leave_history` tool
-- Lists all leave requests you've made with dates, types, and statuses
+- Routes to HR Agent
+- Agent reasons that 21 days > 10 day auto-approve limit → requires manager approval
+- Leave status: **Pending** (requires manager approval)
+- Planning checklist shows all steps completed
 
 ---
 
-### Test 6: Ambiguous Request (Tests Reasoning)
+### Test 8: Ambiguous Request (Tests Reasoning)
 
 **Type:**
 ```
@@ -115,14 +168,14 @@ I'm not feeling well, can I take tomorrow off?
 ```
 
 **What to Expect:**
+- Routes to HR Agent
 - Agent **reasons**: "not feeling well" → sick leave, "tomorrow" → calculates tomorrow's date
 - Agent calls `process_leave_request` with leave_type="Sick Leave"
-- May show slightly lower confidence since "tomorrow" is relative
-- If confidence is too low (<0.6), agent **escalates** instead of acting
+- Planning shows the full reasoning chain
 
 ---
 
-### Test 7: Escalation (Low Confidence)
+### Test 9: Escalation (Low Confidence)
 
 **Type:**
 ```
@@ -132,8 +185,38 @@ Can you fire my manager?
 **What to Expect:**
 - Agent recognizes this is outside its capabilities
 - Confidence drops below threshold (0.6)
+- Planning checklist shows: Routing → ✅, Perceiving → ✅, Planning → ✅, **Escalation → ✅**
 - Response: "I've analyzed your request but I'm not confident enough to act autonomously..."
 - Shows **⚠️ This request has been escalated for human review**
+
+---
+
+### Test 10: Cross-Domain Routing Verification
+
+Test these one by one to verify routing works for each agent:
+
+| # | Message | Expected Agent |
+|---|---------|----------------|
+| a | *"Submit an expense claim for $150 taxi reimbursement"* | 💰 Finance Agent |
+| b | *"What compliance trainings am I overdue on?"* | 📋 Compliance Agent |
+| c | *"I need to report a security concern about data handling"* | 📋 Compliance Agent |
+| d | *"My email is not working"* | 🔧 IT Agent |
+| e | *"Show me my leave history"* | 🏥 HR Agent |
+
+For each, verify:
+- ✅ Correct agent badge appears
+- ✅ Planning checklist starts with correct Routing step
+- ✅ Agent responds appropriately
+
+---
+
+### Test 11: Planning Checklist in Chat History
+
+1. Send any request (e.g., *"How many sick leaves do I have?"*)
+2. Verify the **🧠 Agent Planning** expander is **expanded** on the latest message
+3. Send a second request (e.g., *"I need VPN access"*)
+4. Scroll up — the first message's planning should now be **collapsed**
+5. The latest message's planning should be **expanded**
 
 ---
 
@@ -223,24 +306,40 @@ Revoke VPN access for EMP003, they left the company
 
 ## What to Look For in Every Test
 
-### 1. Agent Reasoning (🧠)
-Click the **🧠 Agent Reasoning** expander after every response. You should see:
+### 1. Agent Planning Checklist (🧠)
+Click the **🧠 Agent Planning** expander after every response. You should see:
+- **Routing** — which agent was selected and why
+- **Perceiving** — employee context gathered
+- **Planning** — which tools were chosen and confidence level
+- **Executing** — each tool call and its result
+- **Evaluating** — final response generation
+- All steps should show ✅ for success, ❌ for failures
+
+### 2. Agent Badge
+Every response shows a `Handled by:` badge:
+- 🏥 HR Agent — leave, policy, employee info
+- 🔧 IT Agent — tickets, access, assets
+- 💰 Finance Agent — expenses, payroll
+- 📋 Compliance Agent — training, violations, audits
+
+### 3. Reasoning (💭)
+Click the **💭 Reasoning** expander to see:
 - **What** the agent understood from your message
 - **Why** it chose that specific tool
 - **How** it extracted parameters (dates, employee IDs, etc.)
 
-### 2. Actions Taken (⚡)
+### 4. Actions Taken (⚡)
 Click the **⚡ Actions Taken** expander to see:
 - Which tool(s) were called
 - ✅ for success, ❌ for failure
 
-### 3. Confidence Score
+### 5. Confidence Score
 The agent assigns a confidence score (0.0–1.0) to every decision:
 - **0.9–1.0**: Very confident, acted autonomously
 - **0.6–0.9**: Reasonably confident, acted but may note uncertainty
 - **Below 0.6**: Escalated to human review (no action taken)
 
-### 4. Learning
+### 6. Learning
 Every decision is recorded by the LearningModule. Over time:
 - Similar past decisions appear as context for new requests
 - The agent references past outcomes to make better decisions
@@ -251,13 +350,15 @@ Every decision is recorded by the LearningModule. Over time:
 
 | Aspect | Before (Multi-Agent) | Now (Agentic AI) |
 |--------|---------------------|-------------------|
+| **Employee Chat** | HR-only assistant | Unified AI Assistant routes to HR, IT, Finance, or Compliance |
+| **Routing** | Hardcoded to HR | LLM + keyword fallback classifies and routes automatically |
+| **Transparency** | Reasoning expander only | Full Agent Planning checklist (Routing → Perceive → Plan → Execute → Evaluate) |
 | **Leave Request** | Fill form: select type, pick dates, type reason, click Submit | Say: *"I want casual leave next week"* — agent figures out the rest |
-| **IT Ticket** | Fill form: select employee, category, priority, description | Say: *"John's laptop crashed"* — agent determines category, priority, creates ticket |
+| **IT Ticket** | Fill form: select employee, category, priority, description | Say: *"My laptop crashed"* — agent determines category, priority, creates ticket |
 | **Policy Q&A** | Separate page, standalone chat | Same chat — agent knows when to answer vs. when to act |
-| **Access Mgmt** | Separate forms for grant/revoke | Say: *"Give John GitHub access"* — agent handles it |
+| **Access Mgmt** | Separate forms for grant/revoke | Say: *"I need VPN access"* — agent handles it |
 | **Decision Making** | Code follows if/else rules only | LLM reasons about context, policies, history, then decides |
 | **Learning** | None | Every decision recorded, past decisions inform future ones |
-| **Transparency** | Black box | Full reasoning chain visible in every response |
 
 ---
 

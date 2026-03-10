@@ -33,23 +33,49 @@ class Orchestrator:
         """
         Main agentic entry point for the unified chat.
         Routes the message to the right agent, which then runs its ReAct loop.
+        Returns planning_steps for UI transparency.
         """
         context = context or {}
+
+        # Agent display labels
+        agent_labels = {
+            "hr": "🏥 HR Agent",
+            "it": "🔧 IT Agent",
+            "finance": "💰 Finance Agent",
+            "compliance": "📋 Compliance Agent",
+        }
+
         # Step 1: Route to the right agent
         routing = self.route_task(user_message, context)
         agent_key = routing.get("agent", "hr")
         agent = self.agents.get(agent_key)
 
+        routing_step = {
+            "step": "Routing",
+            "status": "completed",
+            "detail": f"Routed to {agent_labels.get(agent_key, agent_key)}"
+        }
+
         if not agent:
             return {
                 "response": "I couldn't determine which department can help with this. Could you provide more details?",
                 "agent": "unknown",
+                "agent_label": "🤖 AI",
+                "planning_steps": [{
+                    "step": "Routing",
+                    "status": "failed",
+                    "detail": "Could not determine the right agent"
+                }],
                 "routing_reasoning": routing.get("reasoning", "")
             }
 
         # Step 2: Delegate to the agent's agentic process_request
         result = agent.process_request(user_message, context)
+
+        # Prepend routing step to the agent's planning_steps
+        result["planning_steps"] = [routing_step] + result.get("planning_steps", [])
         result["agent"] = agent_key
+        result["agent_label"] = agent_labels.get(agent_key, agent_key)
         result["agent_name"] = agent.agent_name
         result["routing_reasoning"] = routing.get("reasoning", "")
         return result

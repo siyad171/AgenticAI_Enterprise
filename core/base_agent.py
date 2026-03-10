@@ -100,18 +100,31 @@ class BaseAgent(ABC):
         """
         context = context or {}
         actions_taken = []
+        planning_steps = []
 
         # ── 1. PERCEIVE — gather context ──────────────────────────
         perception = self._perceive(user_message, context)
+        emp = perception.get("employee", {})
+        planning_steps.append({
+            "step": "Perceiving",
+            "status": "completed",
+            "detail": f"Employee: {emp.get('name', 'N/A')}, Dept: {emp.get('department', 'N/A')}"
+        })
 
         # ── 2. REASON & PLAN — LLM decides what to do ────────────
         plan = self._reason_and_plan(user_message, perception)
 
         if plan.get("error"):
+            planning_steps.append({
+                "step": "Planning",
+                "status": "failed",
+                "detail": plan.get("error", "Planning failed")
+            })
             return {
                 "response": plan.get("fallback_response",
                                      "I understand your request but I'm having trouble processing it. Could you please rephrase?"),
                 "actions_taken": [],
+                "planning_steps": planning_steps,
                 "reasoning": plan.get("error", ""),
                 "confidence": 0.0,
                 "escalated": True
@@ -121,11 +134,22 @@ class BaseAgent(ABC):
         confidence = float(plan.get("confidence", 0.7))
         steps = plan.get("steps", [])
 
+        planning_steps.append({
+            "step": "Planning",
+            "status": "completed",
+            "detail": f"Tools: {', '.join(s.get('tool', '?') for s in steps)} (confidence: {confidence:.0%})"
+        })
+
         # ── 3. CHECK ESCALATION ───────────────────────────────────
         if confidence < ESCALATION_CONFIDENCE_THRESHOLD:
             self.log_action("Escalated to Human", {
                 "request": user_message, "reasoning": reasoning,
                 "confidence": confidence
+            })
+            planning_steps.append({
+                "step": "Escalation",
+                "status": "completed",
+                "detail": f"Confidence {confidence:.0%} below threshold — escalated to human"
             })
             return {
                 "response": (f"I've analyzed your request but I'm not confident enough "
@@ -133,6 +157,7 @@ class BaseAgent(ABC):
                              f"My reasoning: {reasoning}\n\n"
                              f"This has been escalated for human review."),
                 "actions_taken": [],
+                "planning_steps": planning_steps,
                 "reasoning": reasoning,
                 "confidence": confidence,
                 "escalated": True
@@ -146,11 +171,18 @@ class BaseAgent(ABC):
             if tool_name and tool_name in self._tools:
                 try:
                     result = self._execute_tool(tool_name, tool_params)
+                    success = result.get("status") != "error"
                     actions_taken.append({
                         "tool": tool_name,
                         "parameters": tool_params,
                         "result": result,
-                        "success": result.get("status") != "error"
+                        "success": success
+                    })
+                    result_brief = result.get("message", result.get("status", "done"))
+                    planning_steps.append({
+                        "step": "Executing",
+                        "status": "completed" if success else "failed",
+                        "detail": f"{tool_name} → {str(result_brief)[:80]}"
                     })
                 except Exception as e:
                     actions_taken.append({
@@ -159,9 +191,18 @@ class BaseAgent(ABC):
                         "result": {"status": "error", "message": str(e)},
                         "success": False
                     })
+                    planning_steps.append({
+                        "step": "Executing",
+                        "status": "failed",
+                        "detail": f"{tool_name} → Error: {str(e)[:60]}"
+                    })
             elif tool_name == "no_tool_needed":
                 # Pure conversational / informational response
-                pass
+                planning_steps.append({
+                    "step": "Executing",
+                    "status": "completed",
+                    "detail": "No tool needed — direct response"
+                })
             else:
                 actions_taken.append({
                     "tool": tool_name or "unknown",
@@ -169,10 +210,21 @@ class BaseAgent(ABC):
                     "result": {"status": "error", "message": f"Tool '{tool_name}' not found"},
                     "success": False
                 })
+                planning_steps.append({
+                    "step": "Executing",
+                    "status": "failed",
+                    "detail": f"Tool '{tool_name}' not found"
+                })
 
         # ── 5. EVALUATE & RESPOND — LLM crafts final answer ──────
         response = self._evaluate_and_respond(
             user_message, reasoning, actions_taken, plan.get("direct_response", ""))
+
+        planning_steps.append({
+            "step": "Evaluating",
+            "status": "completed",
+            "detail": f"Generating response (confidence: {confidence:.0%})"
+        })
 
         # ── 6. LEARN — record this decision ───────────────────────
         outcome = "success" if all(a.get("success", True) for a in actions_taken) else "partial_failure"
@@ -192,6 +244,7 @@ class BaseAgent(ABC):
         return {
             "response": response,
             "actions_taken": actions_taken,
+            "planning_steps": planning_steps,
             "reasoning": reasoning,
             "confidence": confidence,
             "escalated": False

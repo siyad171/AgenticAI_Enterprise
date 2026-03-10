@@ -8,18 +8,18 @@ def show_employee_portal():
     user = st.session_state.current_user
     emp_id = user.employee_id
     emp = st.session_state.db.get_employee(emp_id)
-    agent = st.session_state.agents['hr']
+    orchestrator = st.session_state.orchestrator
 
     st.sidebar.title(f"👋 {emp.name}")
     page = st.sidebar.radio("Menu", [
-        "🏠 Dashboard", "💬 HR Assistant", "👤 Profile"])
+        "🏠 Dashboard", "🤖 AI Assistant", "👤 Profile"])
     if st.sidebar.button("🚪 Logout"):
         logout()
 
     if page == "🏠 Dashboard":
         _dashboard(emp)
-    elif page == "💬 HR Assistant":
-        _agentic_chat(emp, agent)
+    elif page == "🤖 AI Assistant":
+        _agentic_chat(emp, orchestrator)
     elif page == "👤 Profile":
         _profile(emp)
 
@@ -34,31 +34,58 @@ def _dashboard(emp):
     # Quick tips
     st.divider()
     st.markdown("""
-    **💡 Quick Tips — Talk to your HR Assistant:**
+    **💡 Quick Tips — Talk to your AI Assistant:**
+
+    **🏥 HR:**
     - *"I want to take casual leave from March 10 to March 14"*
     - *"What is the company policy on remote work?"*
     - *"How many sick leaves do I have left?"*
-    - *"Show me my leave history"*
+
+    **🔧 IT:**
+    - *"My laptop is not charging, I need help"*
+    - *"I need VPN access for remote work"*
+    - *"Check status of my ticket TKT-001"*
+
+    **💰 Finance:**
+    - *"Submit an expense claim for $200 travel reimbursement"*
+
+    **📋 Compliance:**
+    - *"What training courses am I overdue on?"*
     """)
 
 
-def _agentic_chat(emp, agent):
-    st.header("💬 HR Assistant")
-    st.caption(f"🤖 Agentic AI — I can process leave requests, answer policy questions, look up your info, and more. Just describe what you need.")
+def _agentic_chat(emp, orchestrator):
+    st.header("🤖 AI Assistant")
+    st.caption("I can handle HR, IT, Finance, and Compliance requests. Just describe what you need.")
 
     # Initialize chat history key per employee
-    chat_key = f"hr_chat_{emp.employee_id}"
+    chat_key = f"ai_chat_{emp.employee_id}"
     if chat_key not in st.session_state:
         st.session_state[chat_key] = []
 
     # Display chat history
     for msg in st.session_state[chat_key]:
         with st.chat_message(msg["role"]):
+            if msg["role"] == "assistant":
+                # Agent badge
+                agent_label = msg.get("agent_label", "")
+                if agent_label:
+                    st.caption(f"Handled by: {agent_label}")
+
+                # Planning checklist (collapsed for history)
+                planning = msg.get("planning_steps", [])
+                if planning:
+                    with st.expander("🧠 Agent Planning", expanded=False):
+                        for ps in planning:
+                            icon = "✅" if ps["status"] == "completed" else "❌"
+                            st.markdown(f"{icon} **{ps['step']}** — {ps['detail']}")
+
             st.markdown(msg["content"])
-            # Show reasoning in an expander for transparency
-            if msg["role"] == "assistant" and msg.get("reasoning"):
-                with st.expander("🧠 Agent Reasoning", expanded=False):
-                    st.caption(msg["reasoning"])
+
+            if msg["role"] == "assistant":
+                if msg.get("reasoning"):
+                    with st.expander("💭 Reasoning", expanded=False):
+                        st.caption(msg["reasoning"])
                 if msg.get("actions"):
                     with st.expander("⚡ Actions Taken", expanded=False):
                         for a in msg["actions"]:
@@ -66,16 +93,16 @@ def _agentic_chat(emp, agent):
                             st.caption(f"{status_icon} {a['tool']}")
 
     # Chat input
-    if prompt := st.chat_input("Describe what you need... (e.g., 'I want to take leave next week')"):
+    if prompt := st.chat_input("Describe what you need... (e.g., 'I want to take leave next week' or 'My laptop is not working')"):
         # Append user message
         st.session_state[chat_key].append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Process through agentic ReAct loop
+        # Process through orchestrator → routes to correct agent
         with st.chat_message("assistant"):
             with st.spinner("🤖 Thinking..."):
-                result = agent.process_request(
+                result = orchestrator.chat(
                     prompt,
                     context={"employee_id": emp.employee_id}
                 )
@@ -85,11 +112,23 @@ def _agentic_chat(emp, agent):
             actions = result.get("actions_taken", [])
             confidence = result.get("confidence", 0)
             escalated = result.get("escalated", False)
+            agent_label = result.get("agent_label", "🤖 AI")
+            planning_steps = result.get("planning_steps", [])
+
+            # Agent badge
+            st.caption(f"Handled by: {agent_label}")
+
+            # Planning checklist (expanded for latest message)
+            if planning_steps:
+                with st.expander("🧠 Agent Planning", expanded=True):
+                    for ps in planning_steps:
+                        icon = "✅" if ps["status"] == "completed" else "❌"
+                        st.markdown(f"{icon} **{ps['step']}** — {ps['detail']}")
 
             st.markdown(response)
 
             if reasoning:
-                with st.expander("🧠 Agent Reasoning", expanded=False):
+                with st.expander("💭 Reasoning", expanded=False):
                     st.caption(reasoning)
             if actions:
                 with st.expander("⚡ Actions Taken", expanded=False):
@@ -105,6 +144,8 @@ def _agentic_chat(emp, agent):
             "content": response,
             "reasoning": reasoning,
             "actions": actions,
+            "planning_steps": planning_steps,
+            "agent_label": agent_label,
             "confidence": confidence
         })
 
