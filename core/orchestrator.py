@@ -80,6 +80,73 @@ class Orchestrator:
         result["routing_reasoning"] = routing.get("reasoning", "")
         return result
 
+    def chat_stream(self, user_message: str, context: Dict = None):
+        """
+        Streaming generator version of chat().
+        Yields {"type": "step", "step": {...}} for each planning step as it completes.
+        Finally yields {"type": "result", ...} with the full response payload.
+        """
+        context = context or {}
+
+        agent_labels = {
+            "hr": "🏥 HR Agent",
+            "it": "🔧 IT Agent",
+            "finance": "💰 Finance Agent",
+            "compliance": "📋 Compliance Agent",
+        }
+
+        # Step 1: Route (LLM call — yield routing step as soon as it returns)
+        routing = self.route_task(user_message, context)
+        agent_key = routing.get("agent", "hr")
+        agent = self.agents.get(agent_key)
+
+        yield {
+            "type": "step",
+            "step": {
+                "step": "Routing",
+                "status": "completed",
+                "detail": f"Routed to {agent_labels.get(agent_key, agent_key)}"
+            }
+        }
+
+        if not agent:
+            yield {
+                "type": "result",
+                "response": "I couldn't determine which department can help with this. Could you provide more details?",
+                "agent": "unknown",
+                "agent_label": "🤖 AI",
+                "actions_taken": [],
+                "reasoning": "",
+                "confidence": 0.0,
+                "escalated": False,
+                "routing_reasoning": routing.get("reasoning", "")
+            }
+            return
+
+        # Step 2: Stream steps from the agent's ReAct loop
+        result_data = None
+        for item in agent.process_request_stream(user_message, context):
+            if item["type"] == "step":
+                yield item
+            elif item["type"] == "result":
+                result_data = item
+
+        if result_data is None:
+            result_data = {
+                "type": "result",
+                "response": "An unexpected error occurred. Please try again.",
+                "actions_taken": [],
+                "reasoning": "",
+                "confidence": 0.0,
+                "escalated": False
+            }
+
+        result_data["agent"] = agent_key
+        result_data["agent_label"] = agent_labels.get(agent_key, agent_key)
+        result_data["agent_name"] = agent.agent_name
+        result_data["routing_reasoning"] = routing.get("reasoning", "")
+        yield result_data
+
     # ─────────── Task Routing ───────────
 
     def route_task(self, task_description: str, context: Dict = None) -> Dict:

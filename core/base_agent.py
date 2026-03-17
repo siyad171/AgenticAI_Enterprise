@@ -250,6 +250,191 @@ class BaseAgent(ABC):
             "escalated": False
         }
 
+    def process_request_stream(self, user_message: str, context: Dict = None):
+        """
+        Streaming generator version of process_request.
+        Yields {"type": "step", "step": {...}} for each planning step as it completes.
+        Finally yields {"type": "result", ...} with the full response payload.
+        """
+        context = context or {}
+        actions_taken = []
+
+        # ── 1. PERCEIVE ───────────────────────────────────────────
+        perception = self._perceive(user_message, context)
+        emp = perception.get("employee", {})
+        yield {
+            "type": "step",
+            "step": {
+                "step": "Perceiving",
+                "status": "completed",
+                "detail": f"Employee: {emp.get('name', 'N/A')}, Dept: {emp.get('department', 'N/A')}"
+            }
+        }
+
+        # ── 2. REASON & PLAN ──────────────────────────────────────
+        plan = self._reason_and_plan(user_message, perception)
+
+        if plan.get("error"):
+            yield {
+                "type": "step",
+                "step": {
+                    "step": "Planning",
+                    "status": "failed",
+                    "detail": plan.get("error", "Planning failed")
+                }
+            }
+            yield {
+                "type": "result",
+                "response": plan.get("fallback_response",
+                                     "I understand your request but I'm having trouble processing it. Could you please rephrase?"),
+                "actions_taken": [],
+                "reasoning": plan.get("error", ""),
+                "confidence": 0.0,
+                "escalated": True
+            }
+            return
+
+        reasoning = plan.get("reasoning", "")
+        confidence = float(plan.get("confidence", 0.7))
+        steps = plan.get("steps", [])
+
+        yield {
+            "type": "step",
+            "step": {
+                "step": "Planning",
+                "status": "completed",
+                "detail": f"Tools: {', '.join(s.get('tool', '?') for s in steps)} (confidence: {confidence:.0%})"
+            }
+        }
+
+        # ── 3. CHECK ESCALATION ───────────────────────────────────
+        if confidence < ESCALATION_CONFIDENCE_THRESHOLD:
+            self.log_action("Escalated to Human", {
+                "request": user_message, "reasoning": reasoning,
+                "confidence": confidence
+            })
+            yield {
+                "type": "step",
+                "step": {
+                    "step": "Escalation",
+                    "status": "completed",
+                    "detail": f"Confidence {confidence:.0%} below threshold — escalated to human"
+                }
+            }
+            yield {
+                "type": "result",
+                "response": (f"I've analyzed your request but I'm not confident enough "
+                             f"to act autonomously (confidence: {confidence:.0%}). "
+                             f"My reasoning: {reasoning}\n\n"
+                             f"This has been escalated for human review."),
+                "actions_taken": [],
+                "reasoning": reasoning,
+                "confidence": confidence,
+                "escalated": True
+            }
+            return
+
+        # ── 4. ACT ───────────────────────────────────────────────
+        for step in steps:
+            tool_name = step.get("tool")
+            tool_params = step.get("parameters", {})
+
+            if tool_name and tool_name in self._tools:
+                try:
+                    result = self._execute_tool(tool_name, tool_params)
+                    success = result.get("status") != "error"
+                    actions_taken.append({
+                        "tool": tool_name,
+                        "parameters": tool_params,
+                        "result": result,
+                        "success": success
+                    })
+                    result_brief = result.get("message", result.get("status", "done"))
+                    yield {
+                        "type": "step",
+                        "step": {
+                            "step": "Executing",
+                            "status": "completed" if success else "failed",
+                            "detail": f"{tool_name} → {str(result_brief)[:80]}"
+                        }
+                    }
+                except Exception as e:
+                    actions_taken.append({
+                        "tool": tool_name,
+                        "parameters": tool_params,
+                        "result": {"status": "error", "message": str(e)},
+                        "success": False
+                    })
+                    yield {
+                        "type": "step",
+                        "step": {
+                            "step": "Executing",
+                            "status": "failed",
+                            "detail": f"{tool_name} → Error: {str(e)[:60]}"
+                        }
+                    }
+            elif tool_name == "no_tool_needed":
+                yield {
+                    "type": "step",
+                    "step": {
+                        "step": "Executing",
+                        "status": "completed",
+                        "detail": "No tool needed — direct response"
+                    }
+                }
+            else:
+                actions_taken.append({
+                    "tool": tool_name or "unknown",
+                    "parameters": tool_params,
+                    "result": {"status": "error", "message": f"Tool '{tool_name}' not found"},
+                    "success": False
+                })
+                yield {
+                    "type": "step",
+                    "step": {
+                        "step": "Executing",
+                        "status": "failed",
+                        "detail": f"Tool '{tool_name}' not found"
+                    }
+                }
+
+        # ── 5. EVALUATE & RESPOND ─────────────────────────────────
+        response = self._evaluate_and_respond(
+            user_message, reasoning, actions_taken, plan.get("direct_response", ""))
+
+        yield {
+            "type": "step",
+            "step": {
+                "step": "Evaluating",
+                "status": "completed",
+                "detail": f"Generating response (confidence: {confidence:.0%})"
+            }
+        }
+
+        # ── 6. LEARN ──────────────────────────────────────────────
+        outcome = "success" if all(a.get("success", True) for a in actions_taken) else "partial_failure"
+        self.learning.record_decision(
+            task=user_message,
+            context={"perception": perception, "tools_used": [a["tool"] for a in actions_taken]},
+            decision=reasoning,
+            confidence=confidence,
+            outcome=outcome
+        )
+        self.log_decision(user_message, [a["tool"] for a in actions_taken],
+                          reasoning, confidence, outcome)
+
+        # ── 7. UPDATE GOALS ───────────────────────────────────────
+        self._update_goals(actions_taken)
+
+        yield {
+            "type": "result",
+            "response": response,
+            "actions_taken": actions_taken,
+            "reasoning": reasoning,
+            "confidence": confidence,
+            "escalated": False
+        }
+
     # ─────────── PERCEIVE: gather relevant context ───────────
 
     def _perceive(self, user_message: str, context: Dict) -> Dict:
