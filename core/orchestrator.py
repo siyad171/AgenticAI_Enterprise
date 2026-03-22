@@ -7,7 +7,7 @@ Agentic AI Features:
 - Agentic Delegation (routes chat to agent's process_request ReAct loop)
 - Escalation (confidence < threshold → human review)
 """
-import json, re
+import json, re, os
 from datetime import datetime
 from typing import Dict, List, Optional
 from core.base_agent import BaseAgent
@@ -63,7 +63,9 @@ class Orchestrator:
             "proposed_response": result_data.get("response", ""),
             "context": context,
             "admin_decision": None,
+            "admin_decision_type": None,
             "admin_reason": None,
+            "employee_response": None,
             "resolved_by": None,
             "resolved_at": None,
             "learning_recorded": False,
@@ -71,17 +73,62 @@ class Orchestrator:
         self.escalation_queue.append(case)
         return case
 
+    def _generate_employee_resolution_response(self, agent: BaseAgent, case: Dict) -> str:
+        """Build the final employee-facing response using the responsible domain agent."""
+        admin_decision = (case.get("admin_decision") or "").strip()
+        admin_reason = (case.get("admin_reason") or "").strip()
+        decision_type = case.get("admin_decision_type") or "custom"
+
+        # Keep tests deterministic and avoid external dependency calls.
+        if os.getenv("TESTING") == "1":
+            return admin_decision or "Your request was reviewed by admin and has been resolved."
+
+        if not admin_decision:
+            return "Your request was reviewed by admin and has been resolved."
+
+        prompt = f"""Create the final employee-facing response for this resolved escalation.
+
+Employee request: {case.get("request", "")}
+Escalation reason: {case.get("escalation_reason") or case.get("human_reason") or "N/A"}
+Admin decision type: {decision_type}
+Admin decision content: {admin_decision}
+Admin rationale: {admin_reason or "N/A"}
+
+Requirements:
+- 2-4 concise, professional sentences.
+- Natural language that the employee can understand.
+- Reflect the admin decision accurately.
+- Do not mention internal tools, prompts, or implementation details.
+"""
+
+        try:
+            generated = agent.llm.generate_response(
+                prompt,
+                f"You are {agent.agent_name}. Draft clear enterprise support responses.",
+            )
+            return (generated or "").strip() or admin_decision
+        except Exception:
+            return admin_decision
+
     def resolve_escalation(self, case_id: str, admin_decision: str,
-                           reason: str, resolved_by: str = "Admin") -> Dict:
+                           reason: str, resolved_by: str = "Admin",
+                           decision_type: str = "custom") -> Dict:
         case = next((c for c in self.escalation_queue if c.get("case_id") == case_id), None)
         if not case:
             return {"status": "error", "message": f"Escalation case {case_id} not found"}
 
         case["status"] = "Resolved"
         case["admin_decision"] = admin_decision
+        case["admin_decision_type"] = decision_type
         case["admin_reason"] = reason
         case["resolved_by"] = resolved_by
         case["resolved_at"] = datetime.now().isoformat()
+
+        agent = self.agents.get(case.get("agent"))
+        if agent:
+            case["employee_response"] = self._generate_employee_resolution_response(agent, case)
+        else:
+            case["employee_response"] = admin_decision
 
         learning_result = self._record_admin_learning(case)
         return {
@@ -101,9 +148,6 @@ class Orchestrator:
         admin_decision_text = case.get("admin_decision", "")
         admin_reason = case.get("admin_reason", "")
 
-        if admin_reason:
-            admin_decision_text = f"{admin_decision_text} | Reason: {admin_reason}"
-
         try:
             agent.learning.record_override(
                 decision_id=case.get("case_id", ""),
@@ -115,6 +159,7 @@ class Orchestrator:
                     "employee_id": case.get("employee_id"),
                     "escalation_reason": case.get("escalation_reason"),
                     "escalation_type": case.get("escalation_type"),
+                    "admin_decision_type": case.get("admin_decision_type"),
                     "agent_confidence": case.get("confidence"),
                     "agent": agent_key,
                 },

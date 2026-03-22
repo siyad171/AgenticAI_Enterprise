@@ -4,6 +4,52 @@ import datetime
 from ui.utils import logout
 
 
+def _find_escalation_case(orchestrator, case_id: str):
+    if not case_id:
+        return None
+    for case in orchestrator.get_escalation_queue():
+        if case.get("case_id") == case_id:
+            return case
+    return None
+
+
+def _render_escalation_updates(emp, orchestrator):
+    cases = [
+        c for c in orchestrator.get_escalation_queue()
+        if c.get("employee_id") == emp.employee_id
+    ]
+    if not cases:
+        return
+
+    open_cases = [c for c in cases if c.get("status") == "Open"]
+    resolved_cases = [c for c in cases if c.get("status") == "Resolved"]
+
+    st.subheader("📌 Escalation Updates")
+    if open_cases:
+        st.warning(f"{len(open_cases)} request(s) are currently under human review.")
+    if resolved_cases:
+        st.success(f"{len(resolved_cases)} escalated request(s) have admin decisions.")
+
+    latest = sorted(cases, key=lambda x: x.get("created_at", ""), reverse=True)[:5]
+    with st.expander("View latest escalation statuses", expanded=False):
+        for case in latest:
+            status = case.get("status", "Open")
+            case_id = case.get("case_id", "N/A")
+            created = case.get("created_at", "N/A")
+            if status == "Resolved":
+                st.markdown(f"**{case_id}** | Resolved")
+                st.caption(f"Created: {created}")
+                st.caption(f"Resolution Type: {case.get('admin_decision_type') or 'N/A'}")
+                final_employee_response = case.get("employee_response") or case.get("admin_decision") or "N/A"
+                st.caption(f"Final Response: {final_employee_response}")
+                st.caption(f"Rationale: {case.get('admin_reason') or 'N/A'}")
+                st.caption(f"Resolved At: {case.get('resolved_at') or 'N/A'}")
+            else:
+                st.markdown(f"**{case_id}** | Open")
+                st.caption(f"Created: {created}")
+                st.caption(f"Reason: {case.get('escalation_reason') or case.get('human_reason') or 'N/A'}")
+
+
 def show_employee_portal():
     user = st.session_state.current_user
     emp_id = user.employee_id
@@ -57,6 +103,7 @@ def _dashboard(emp):
 def _agentic_chat(emp, orchestrator):
     st.header("🤖 AI Assistant")
     st.caption("I can handle HR, IT, Finance, and Compliance requests. Just describe what you need.")
+    _render_escalation_updates(emp, orchestrator)
 
     # Initialize chat history key per employee
     chat_key = f"ai_chat_{emp.employee_id}"
@@ -91,6 +138,19 @@ def _agentic_chat(emp, orchestrator):
                         for a in msg["actions"]:
                             status_icon = "✅" if a.get("success") else "❌"
                             st.caption(f"{status_icon} {a['tool']}")
+                escalation_id = msg.get("escalation_id", "")
+                if escalation_id:
+                    case = _find_escalation_case(orchestrator, escalation_id)
+                    if case and case.get("status") == "Resolved":
+                        final_employee_response = case.get("employee_response") or case.get("admin_decision") or "N/A"
+                        st.success(
+                            f"Escalation {escalation_id} resolved by admin. "
+                            f"Final response: {final_employee_response}"
+                        )
+                        if case.get("admin_reason"):
+                            st.caption(f"Rationale: {case.get('admin_reason')}")
+                    else:
+                        st.warning(f"Escalation {escalation_id} is still under human review.")
 
     # Chat input
     if prompt := st.chat_input("Describe what you need... (e.g., 'I want to take leave next week' or 'My laptop is not working')"):
@@ -169,7 +229,9 @@ def _agentic_chat(emp, orchestrator):
             "actions": actions,
             "planning_steps": planning_steps,
             "agent_label": agent_label,
-            "confidence": confidence
+            "confidence": confidence,
+            "escalated": escalated,
+            "escalation_id": escalation_id,
         })
 
     # Clear chat button

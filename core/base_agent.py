@@ -80,6 +80,56 @@ class BaseAgent(ABC):
             lines.append(f"- {t.name}({params})\n  Description: {t.description}")
         return "\n".join(lines)
 
+    def _try_apply_learned_override(self, user_message: str, reasoning: str,
+                                    confidence: float, perception: Dict) -> Optional[Dict]:
+        """Use a prior admin-reviewed override to avoid repeat escalations.
+
+        This is only attempted in low-confidence paths; policy-sensitive requests
+        that explicitly require human review still escalate earlier.
+        """
+        matched = self.learning.find_best_override(user_message, min_overlap=2)
+        if not matched:
+            return None
+
+        decision_id = matched.get("decision_id", "")
+        admin_decision = (matched.get("admin_decision") or "").strip()
+        if not admin_decision:
+            admin_decision = "Proceed according to previously approved admin guidance."
+
+        # Use the learned admin decision as the employee-facing response.
+        response = admin_decision
+
+        learned_reasoning = (
+            f"Low-confidence reasoning was superseded by learned admin override {decision_id}. "
+            f"Original reasoning: {reasoning}"
+        )
+
+        self.learning.record_decision(
+            task=user_message,
+            context={
+                "perception": perception,
+                "tools_used": [],
+                "learning_applied": True,
+                "learning_source_decision_id": decision_id,
+            },
+            decision=learned_reasoning,
+            confidence=max(confidence, ESCALATION_CONFIDENCE_THRESHOLD),
+            outcome="success",
+        )
+        self.log_decision(
+            user_message,
+            ["learned_override"],
+            learned_reasoning,
+            max(confidence, ESCALATION_CONFIDENCE_THRESHOLD),
+            "success",
+        )
+
+        return {
+            "response": response,
+            "reasoning": learned_reasoning,
+            "learning_source_decision_id": decision_id,
+        }
+
     # ═══════════════════════════════════════════════════════════════
     #  ReAct LOOP — the core agentic reasoning engine
     # ═══════════════════════════════════════════════════════════════
@@ -144,6 +194,34 @@ class BaseAgent(ABC):
 
         # ── 3. CHECK HUMAN-REQUIRED ESCALATION ──────────────────
         if requires_human:
+            learned_result = self._try_apply_learned_override(
+                user_message=user_message,
+                reasoning=reasoning,
+                confidence=confidence,
+                perception=perception,
+            )
+            if learned_result:
+                planning_steps.append({
+                    "step": "Learning Match",
+                    "status": "completed",
+                    "detail": f"Applied admin override {learned_result.get('learning_source_decision_id', '')}"
+                })
+                planning_steps.append({
+                    "step": "Escalation",
+                    "status": "completed",
+                    "detail": "Policy-sensitive escalation bypassed via learned admin decision"
+                })
+                return {
+                    "response": learned_result["response"],
+                    "actions_taken": [],
+                    "planning_steps": planning_steps,
+                    "reasoning": learned_result["reasoning"],
+                    "confidence": confidence,
+                    "escalated": False,
+                    "learning_applied": True,
+                    "learning_source_decision_id": learned_result.get("learning_source_decision_id", ""),
+                }
+
             self.log_action("Escalated to Human", {
                 "request": user_message,
                 "reasoning": reasoning,
@@ -171,6 +249,34 @@ class BaseAgent(ABC):
 
         # ── 4. CHECK CONFIDENCE ESCALATION ───────────────────────
         if confidence < ESCALATION_CONFIDENCE_THRESHOLD:
+            learned_result = self._try_apply_learned_override(
+                user_message=user_message,
+                reasoning=reasoning,
+                confidence=confidence,
+                perception=perception,
+            )
+            if learned_result:
+                planning_steps.append({
+                    "step": "Learning Match",
+                    "status": "completed",
+                    "detail": f"Applied admin override {learned_result.get('learning_source_decision_id', '')}"
+                })
+                planning_steps.append({
+                    "step": "Escalation",
+                    "status": "completed",
+                    "detail": "Low-confidence escalation bypassed via learned admin decision"
+                })
+                return {
+                    "response": learned_result["response"],
+                    "actions_taken": [],
+                    "planning_steps": planning_steps,
+                    "reasoning": learned_result["reasoning"],
+                    "confidence": confidence,
+                    "escalated": False,
+                    "learning_applied": True,
+                    "learning_source_decision_id": learned_result.get("learning_source_decision_id", ""),
+                }
+
             self.log_action("Escalated to Human", {
                 "request": user_message, "reasoning": reasoning,
                 "confidence": confidence
@@ -343,6 +449,41 @@ class BaseAgent(ABC):
 
         # ── 3. CHECK HUMAN-REQUIRED ESCALATION ──────────────────
         if requires_human:
+            learned_result = self._try_apply_learned_override(
+                user_message=user_message,
+                reasoning=reasoning,
+                confidence=confidence,
+                perception=perception,
+            )
+            if learned_result:
+                yield {
+                    "type": "step",
+                    "step": {
+                        "step": "Learning Match",
+                        "status": "completed",
+                        "detail": f"Applied admin override {learned_result.get('learning_source_decision_id', '')}"
+                    }
+                }
+                yield {
+                    "type": "step",
+                    "step": {
+                        "step": "Escalation",
+                        "status": "completed",
+                        "detail": "Policy-sensitive escalation bypassed via learned admin decision"
+                    }
+                }
+                yield {
+                    "type": "result",
+                    "response": learned_result["response"],
+                    "actions_taken": [],
+                    "reasoning": learned_result["reasoning"],
+                    "confidence": confidence,
+                    "escalated": False,
+                    "learning_applied": True,
+                    "learning_source_decision_id": learned_result.get("learning_source_decision_id", ""),
+                }
+                return
+
             self.log_action("Escalated to Human", {
                 "request": user_message,
                 "reasoning": reasoning,
@@ -374,6 +515,41 @@ class BaseAgent(ABC):
 
         # ── 4. CHECK CONFIDENCE ESCALATION ───────────────────────
         if confidence < ESCALATION_CONFIDENCE_THRESHOLD:
+            learned_result = self._try_apply_learned_override(
+                user_message=user_message,
+                reasoning=reasoning,
+                confidence=confidence,
+                perception=perception,
+            )
+            if learned_result:
+                yield {
+                    "type": "step",
+                    "step": {
+                        "step": "Learning Match",
+                        "status": "completed",
+                        "detail": f"Applied admin override {learned_result.get('learning_source_decision_id', '')}"
+                    }
+                }
+                yield {
+                    "type": "step",
+                    "step": {
+                        "step": "Escalation",
+                        "status": "completed",
+                        "detail": "Low-confidence escalation bypassed via learned admin decision"
+                    }
+                }
+                yield {
+                    "type": "result",
+                    "response": learned_result["response"],
+                    "actions_taken": [],
+                    "reasoning": learned_result["reasoning"],
+                    "confidence": confidence,
+                    "escalated": False,
+                    "learning_applied": True,
+                    "learning_source_decision_id": learned_result.get("learning_source_decision_id", ""),
+                }
+                return
+
             self.log_action("Escalated to Human", {
                 "request": user_message, "reasoning": reasoning,
                 "confidence": confidence

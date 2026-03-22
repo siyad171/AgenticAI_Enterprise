@@ -176,6 +176,13 @@ def _escalations():
                 st.write("**Employee Request:**")
                 st.info(case.get("request", ""))
 
+                st.write("**Agent Proposed Response:**")
+                proposed = (case.get("proposed_response") or "").strip()
+                if proposed:
+                    st.info(proposed)
+                else:
+                    st.warning("No proposed response was captured for this escalation.")
+
                 if case.get("reasoning"):
                     with st.expander("Agent Reasoning", expanded=False):
                         st.caption(case.get("reasoning", ""))
@@ -183,12 +190,42 @@ def _escalations():
                 decision = st.selectbox(
                     "Admin Decision",
                     [
-                        "Approve proposed response",
+                        "Approve agent proposed response",
                         "Override with corrected decision",
                         "Escalate to specialist team",
                     ],
                     key=f"decision_{case.get('case_id')}"
                 )
+
+                final_response = ""
+                if decision == "Approve agent proposed response":
+                    final_response = st.text_area(
+                        "Final response to employee (natural language)",
+                        value=proposed,
+                        key=f"approved_response_{case.get('case_id')}",
+                        help="This exact response will be shown to the employee and reused as learning guidance."
+                    )
+                elif decision == "Override with corrected decision":
+                    final_response = st.text_area(
+                        "Corrected response for this situation (required)",
+                        key=f"override_response_{case.get('case_id')}",
+                        placeholder=(
+                            "Write the exact natural-language response the agent should give in similar future cases. "
+                            "Example: Please share details by email with HR so a human specialist can review this request."
+                        ),
+                        help="Use clear natural language because this is stored as reusable policy guidance."
+                    )
+                else:
+                    final_response = st.text_area(
+                        "Specialist escalation response (natural language)",
+                        value=(
+                            "Your request requires specialist HR review. "
+                            "I have escalated it to the specialist team for manual handling."
+                        ),
+                        key=f"specialist_response_{case.get('case_id')}",
+                        help="This response is sent to the employee and used as a learning pattern for specialist escalation."
+                    )
+
                 reason = st.text_area(
                     "Decision rationale",
                     key=f"reason_{case.get('case_id')}",
@@ -196,14 +233,23 @@ def _escalations():
                 )
 
                 if st.button("Save Decision", key=f"save_{case.get('case_id')}", type="primary"):
-                    if not reason.strip():
+                    if not final_response.strip():
+                        st.error("Please provide a natural-language final response for the employee.")
+                    elif not reason.strip():
                         st.error("Please provide rationale so the agent can learn from this decision.")
                     else:
+                        decision_type = {
+                            "Approve agent proposed response": "approve_proposed",
+                            "Override with corrected decision": "override_corrected",
+                            "Escalate to specialist team": "escalate_specialist",
+                        }.get(decision, "custom")
+
                         result = orch.resolve_escalation(
                             case_id=case.get("case_id"),
-                            admin_decision=decision,
+                            admin_decision=final_response.strip(),
                             reason=reason.strip(),
                             resolved_by="Admin",
+                            decision_type=decision_type,
                         )
                         if result.get("status") == "success":
                             st.success("Decision saved and learning memory updated.")
@@ -216,7 +262,8 @@ def _escalations():
             for case in resolved_cases[:50]:
                 st.write(
                     f"- {case.get('case_id')} | {case.get('agent_label')} | "
-                    f"{case.get('admin_decision')} | Learning: {case.get('learning_recorded')}"
+                    f"Type: {case.get('admin_decision_type', 'N/A')} | "
+                    f"Decision: {case.get('admin_decision')} | Learning: {case.get('learning_recorded')}"
                 )
 
 
@@ -235,7 +282,7 @@ def _admin_assistant():
     with st.expander("Supported commands", expanded=False):
         st.markdown("- show open escalations")
         st.markdown("- show escalation stats")
-        st.markdown("- resolve ESC-<id> approve because <reason>")
+        st.markdown("- resolve ESC-<id> approve because <reason> (approve agent proposed response)")
         st.markdown("- resolve ESC-<id> override because <reason>")
         st.markdown("- resolve ESC-<id> escalate because <reason>")
 
@@ -279,21 +326,42 @@ def _run_admin_assistant(prompt: str) -> str:
             return "Could not find escalation ID. Use format: resolve ESC-<id> approve because <reason>"
 
         case_id = m.group(1).upper()
+        case = next((c for c in orch.get_escalation_queue() if c.get("case_id") == case_id), None)
+        if not case:
+            return f"Escalation case {case_id} not found."
+
         if " override " in f" {lower} ":
-            decision = "Override with corrected decision"
+            decision_type = "override_corrected"
+            final_response = (
+                "Your request has been reviewed by admin. "
+                "Please share complete details with HR by email so the team can process this safely."
+            )
         elif " escalate " in f" {lower} ":
-            decision = "Escalate to specialist team"
+            decision_type = "escalate_specialist"
+            final_response = (
+                "Your request requires specialist review. "
+                "It has been escalated to the specialist team for manual handling."
+            )
         else:
-            decision = "Approve proposed response"
+            decision_type = "approve_proposed"
+            final_response = (case.get("proposed_response") or "").strip() or (
+                "Your request has been reviewed and approved by admin."
+            )
 
         reason = "Resolved by admin assistant command"
         if " because " in lower:
             reason = text.split(" because ", 1)[1].strip() or reason
 
-        result = orch.resolve_escalation(case_id, decision, reason, resolved_by="Admin")
+        result = orch.resolve_escalation(
+            case_id,
+            final_response,
+            reason,
+            resolved_by="Admin",
+            decision_type=decision_type,
+        )
         if result.get("status") != "success":
             return result.get("message", "Could not resolve escalation.")
-        return f"Resolved {case_id}. Decision saved to learning memory."
+        return f"Resolved {case_id}. Natural-language decision saved to learning memory."
 
     return (
         "I can help with escalation operations. Try: 'show open escalations', "
