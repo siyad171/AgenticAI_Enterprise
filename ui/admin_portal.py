@@ -1,6 +1,7 @@
 """Admin Portal — Employee mgmt, candidates, audit, config"""
 import streamlit as st
 import datetime
+import re
 from ui.utils import logout
 
 
@@ -12,15 +13,15 @@ def _count_new_candidates(db) -> int:
 
 def show_admin_portal():
     db = st.session_state.db
+    orch = st.session_state.orchestrator
     new_count = _count_new_candidates(db)
     badge = f" ({new_count})" if new_count else ""
 
     st.sidebar.title("⚙️ Admin Portal")
     page = st.sidebar.radio("Menu", [
         "🏠 Dashboard", "👥 Employees", f"📋 Candidates{badge}",
-        "📊 Audit Report", "⚙️ Settings",
-        "🖥️ IT", "💰 Finance", "📜 Compliance",
-        "🔄 Orchestrator"])
+        "📊 Audit Report", "🚨 Escalations",
+        "🤖 Admin Assistant", "⚙️ Settings"])
     if st.sidebar.button("🚪 Logout"):
         logout()
 
@@ -32,24 +33,18 @@ def show_admin_portal():
         _candidate_review()
     elif page == "📊 Audit Report":
         _audit_report()
+    elif page == "🚨 Escalations":
+        _escalations()
+    elif page == "🤖 Admin Assistant":
+        _admin_assistant()
     elif page == "⚙️ Settings":
         _settings()
-    elif page == "🖥️ IT":
-        from ui.it_portal import show_it_portal
-        show_it_portal()
-    elif page == "💰 Finance":
-        from ui.finance_portal import show_finance_portal
-        show_finance_portal()
-    elif page == "📜 Compliance":
-        from ui.compliance_portal import show_compliance_portal
-        show_compliance_portal()
-    elif page == "🔄 Orchestrator":
-        from ui.orchestrator_dashboard import show_orchestrator_dashboard
-        show_orchestrator_dashboard()
 
 
 def _admin_dashboard():
     db = st.session_state.db
+    orch = st.session_state.orchestrator
+    metrics = orch.get_escalation_metrics()
     st.header("🏠 Admin Dashboard")
 
     # Notification banner
@@ -58,12 +53,13 @@ def _admin_dashboard():
         st.warning(f"🔔 **{new_count} candidate(s)** awaiting review — "
                    "go to **📋 Candidates** to view full reports.")
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Employees", len(db.employees))
     c2.metric("Candidates", len(db.candidates))
     c3.metric("Open Tickets", len([t for t in getattr(db, 'it_tickets', {}).values()
                                     if getattr(t, 'status', '') == 'Open']))
-    c4.metric("Audit Logs", len(db.audit_logs))
+    c4.metric("Open Escalations", metrics.get("open", 0))
+    c5.metric("Audit Logs", len(db.audit_logs))
 
 
 def _employee_management():
@@ -155,3 +151,151 @@ def _settings():
                 'skill_match_threshold': skill, 'auto_accept_threshold': auto,
                 'experience_required': exp, 'education_required': edu})
             st.success("✅ Settings saved")
+
+
+def _escalations():
+    orch = st.session_state.orchestrator
+    st.header("🚨 Escalations")
+
+    open_cases = list(reversed(orch.get_escalation_queue(status="Open")))
+    resolved_cases = list(reversed(orch.get_escalation_queue(status="Resolved")))
+
+    if not open_cases:
+        st.success("No open escalations right now.")
+    else:
+        st.subheader(f"Open Cases ({len(open_cases)})")
+        for case in open_cases:
+            title = (
+                f"{case.get('case_id')} | {case.get('agent_label')} | "
+                f"{case.get('employee_name', 'Unknown')} ({case.get('employee_id', 'N/A')})"
+            )
+            with st.expander(title):
+                st.write(f"**Created:** {case.get('created_at', 'N/A')}")
+                st.write(f"**Confidence:** {case.get('confidence', 0.0):.0%}")
+                st.write(f"**Escalation Reason:** {case.get('escalation_reason') or case.get('human_reason') or 'N/A'}")
+                st.write("**Employee Request:**")
+                st.info(case.get("request", ""))
+
+                if case.get("reasoning"):
+                    with st.expander("Agent Reasoning", expanded=False):
+                        st.caption(case.get("reasoning", ""))
+
+                decision = st.selectbox(
+                    "Admin Decision",
+                    [
+                        "Approve proposed response",
+                        "Override with corrected decision",
+                        "Escalate to specialist team",
+                    ],
+                    key=f"decision_{case.get('case_id')}"
+                )
+                reason = st.text_area(
+                    "Decision rationale",
+                    key=f"reason_{case.get('case_id')}",
+                    placeholder="Explain why this decision should be reused for similar future cases."
+                )
+
+                if st.button("Save Decision", key=f"save_{case.get('case_id')}", type="primary"):
+                    if not reason.strip():
+                        st.error("Please provide rationale so the agent can learn from this decision.")
+                    else:
+                        result = orch.resolve_escalation(
+                            case_id=case.get("case_id"),
+                            admin_decision=decision,
+                            reason=reason.strip(),
+                            resolved_by="Admin",
+                        )
+                        if result.get("status") == "success":
+                            st.success("Decision saved and learning memory updated.")
+                            st.rerun()
+                        else:
+                            st.error(result.get("message", "Failed to resolve escalation."))
+
+    if resolved_cases:
+        with st.expander(f"Resolved Cases ({len(resolved_cases)})", expanded=False):
+            for case in resolved_cases[:50]:
+                st.write(
+                    f"- {case.get('case_id')} | {case.get('agent_label')} | "
+                    f"{case.get('admin_decision')} | Learning: {case.get('learning_recorded')}"
+                )
+
+
+def _admin_assistant():
+    st.header("🤖 Admin Assistant")
+    st.caption("Use this assistant to monitor escalations and apply quick admin decisions.")
+
+    chat_key = "admin_assistant_chat"
+    if chat_key not in st.session_state:
+        st.session_state[chat_key] = []
+
+    for msg in st.session_state[chat_key]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    with st.expander("Supported commands", expanded=False):
+        st.markdown("- show open escalations")
+        st.markdown("- show escalation stats")
+        st.markdown("- resolve ESC-<id> approve because <reason>")
+        st.markdown("- resolve ESC-<id> override because <reason>")
+        st.markdown("- resolve ESC-<id> escalate because <reason>")
+
+    if prompt := st.chat_input("Ask admin assistant..."):
+        st.session_state[chat_key].append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        response = _run_admin_assistant(prompt)
+        st.session_state[chat_key].append({"role": "assistant", "content": response})
+        with st.chat_message("assistant"):
+            st.markdown(response)
+
+
+def _run_admin_assistant(prompt: str) -> str:
+    orch = st.session_state.orchestrator
+    text = prompt.strip()
+    lower = text.lower()
+
+    if "show open escalation" in lower or "open escalations" in lower:
+        open_cases = orch.get_escalation_queue(status="Open")
+        if not open_cases:
+            return "No open escalations."
+
+        top = list(reversed(open_cases))[:5]
+        lines = [f"Open escalations: {len(open_cases)}"]
+        for c in top:
+            lines.append(
+                f"- {c.get('case_id')} | {c.get('agent_label')} | "
+                f"{c.get('employee_name', 'Unknown')} | reason: {c.get('escalation_reason') or c.get('human_reason') or 'N/A'}"
+            )
+        return "\n".join(lines)
+
+    if "show escalation stats" in lower or "escalation stats" in lower:
+        m = orch.get_escalation_metrics()
+        return f"Escalations -> Open: {m['open']}, Resolved: {m['resolved']}, Total: {m['total']}"
+
+    if lower.startswith("resolve "):
+        m = re.search(r"(ESC-\d+)", text, flags=re.IGNORECASE)
+        if not m:
+            return "Could not find escalation ID. Use format: resolve ESC-<id> approve because <reason>"
+
+        case_id = m.group(1).upper()
+        if " override " in f" {lower} ":
+            decision = "Override with corrected decision"
+        elif " escalate " in f" {lower} ":
+            decision = "Escalate to specialist team"
+        else:
+            decision = "Approve proposed response"
+
+        reason = "Resolved by admin assistant command"
+        if " because " in lower:
+            reason = text.split(" because ", 1)[1].strip() or reason
+
+        result = orch.resolve_escalation(case_id, decision, reason, resolved_by="Admin")
+        if result.get("status") != "success":
+            return result.get("message", "Could not resolve escalation.")
+        return f"Resolved {case_id}. Decision saved to learning memory."
+
+    return (
+        "I can help with escalation operations. Try: 'show open escalations', "
+        "'show escalation stats', or 'resolve ESC-<id> approve because <reason>'."
+    )

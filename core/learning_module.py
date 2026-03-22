@@ -40,7 +40,8 @@ class LearningModule:
         self._save_history()
 
     def record_override(self, decision_id: str, original_decision: str,
-                        admin_decision: str, reason: str):
+                        admin_decision: str, reason: str,
+                        task: str = None, context: Dict = None):
         """Admin overrides agent decision — high-value learning signal."""
         override = {
             "decision_id": decision_id,
@@ -49,6 +50,8 @@ class LearningModule:
             "original_decision": original_decision,
             "admin_decision": admin_decision,
             "reason": reason,
+            "task": task,
+            "context": context or {},
         }
         self.overrides.append(override)
         self._save_history()
@@ -68,6 +71,26 @@ class LearningModule:
                 scored.append((overlap, d))
         scored.sort(key=lambda x: x[0], reverse=True)
         return [d for _, d in scored[:n]]
+
+    def get_relevant_overrides(self, current_task: str, n: int = 3) -> List[Dict]:
+        """Retrieve similar admin override outcomes to guide future decisions."""
+        keywords = set(current_task.lower().split())
+        scored = []
+
+        for o in self.overrides:
+            task_text = (o.get("task") or "").lower()
+            if not task_text:
+                continue
+            task_words = set(task_text.split())
+            overlap = len(keywords & task_words)
+            if overlap > 0:
+                scored.append((overlap, o))
+
+        if not scored:
+            return self.overrides[-n:]
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [o for _, o in scored[:n]]
 
     def get_performance_stats(self) -> Dict:
         total = len(self.decisions)

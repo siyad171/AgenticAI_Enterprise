@@ -128,6 +128,7 @@ def _agentic_chat(emp, orchestrator):
             actions = result_data.get("actions_taken", [])
             confidence = result_data.get("confidence", 0)
             escalated = result_data.get("escalated", False)
+            escalation_id = result_data.get("escalation_id", "")
             agent_label = result_data.get("agent_label", "🤖 AI")
             planning_steps = displayed_steps
 
@@ -155,7 +156,10 @@ def _agentic_chat(emp, orchestrator):
                         status_icon = "✅" if a.get("success") else "❌"
                         st.caption(f"{status_icon} {a['tool']}")
             if escalated:
-                st.warning("⚠️ This request has been escalated for human review.")
+                if escalation_id:
+                    st.warning(f"⚠️ This request has been escalated for human review. Case ID: {escalation_id}")
+                else:
+                    st.warning("⚠️ This request has been escalated for human review.")
 
         # Save to history
         st.session_state[chat_key].append({

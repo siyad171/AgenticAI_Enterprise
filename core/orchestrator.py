@@ -27,6 +27,103 @@ class Orchestrator:
         self.completed_workflows: List[Dict] = []
         self.escalation_queue: List[Dict] = []
 
+    # - - - - - - - - - Escalation lifecycle - - - - - - - - -
+
+    def _create_escalation_case(self, user_message: str, context: Dict,
+                                agent_key: str, agent_label: str,
+                                result_data: Dict) -> Dict:
+        timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')
+        case_id = f"ESC-{timestamp}"
+        employee_id = context.get("employee_id")
+
+        employee_name = "Unknown"
+        try:
+            if employee_id:
+                db = next(iter(self.agents.values())).db
+                emp = db.get_employee(employee_id)
+                if emp:
+                    employee_name = emp.name
+        except Exception:
+            pass
+
+        case = {
+            "case_id": case_id,
+            "status": "Open",
+            "created_at": datetime.now().isoformat(),
+            "request": user_message,
+            "employee_id": employee_id,
+            "employee_name": employee_name,
+            "agent": agent_key,
+            "agent_label": agent_label,
+            "confidence": float(result_data.get("confidence", 0.0) or 0.0),
+            "reasoning": result_data.get("reasoning", ""),
+            "escalation_reason": result_data.get("escalation_reason", ""),
+            "human_reason": result_data.get("human_reason", ""),
+            "escalation_type": result_data.get("escalation_type", ""),
+            "proposed_response": result_data.get("response", ""),
+            "context": context,
+            "admin_decision": None,
+            "admin_reason": None,
+            "resolved_by": None,
+            "resolved_at": None,
+            "learning_recorded": False,
+        }
+        self.escalation_queue.append(case)
+        return case
+
+    def resolve_escalation(self, case_id: str, admin_decision: str,
+                           reason: str, resolved_by: str = "Admin") -> Dict:
+        case = next((c for c in self.escalation_queue if c.get("case_id") == case_id), None)
+        if not case:
+            return {"status": "error", "message": f"Escalation case {case_id} not found"}
+
+        case["status"] = "Resolved"
+        case["admin_decision"] = admin_decision
+        case["admin_reason"] = reason
+        case["resolved_by"] = resolved_by
+        case["resolved_at"] = datetime.now().isoformat()
+
+        learning_result = self._record_admin_learning(case)
+        return {
+            "status": "success",
+            "case_id": case_id,
+            "learning_recorded": learning_result.get("status") == "success",
+            "learning_message": learning_result.get("message", "")
+        }
+
+    def _record_admin_learning(self, case: Dict) -> Dict:
+        agent_key = case.get("agent")
+        agent = self.agents.get(agent_key)
+        if not agent:
+            return {"status": "error", "message": f"Unknown agent: {agent_key}"}
+
+        original_decision = case.get("reasoning") or case.get("escalation_reason") or "Escalated to human review"
+        admin_decision_text = case.get("admin_decision", "")
+        admin_reason = case.get("admin_reason", "")
+
+        if admin_reason:
+            admin_decision_text = f"{admin_decision_text} | Reason: {admin_reason}"
+
+        try:
+            agent.learning.record_override(
+                decision_id=case.get("case_id", ""),
+                original_decision=original_decision,
+                admin_decision=admin_decision_text,
+                reason=admin_reason,
+                task=case.get("request", ""),
+                context={
+                    "employee_id": case.get("employee_id"),
+                    "escalation_reason": case.get("escalation_reason"),
+                    "escalation_type": case.get("escalation_type"),
+                    "agent_confidence": case.get("confidence"),
+                    "agent": agent_key,
+                },
+            )
+            case["learning_recorded"] = True
+            return {"status": "success", "message": "Admin decision persisted to learning memory"}
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to persist learning: {e}"}
+
     # ─────────── Agentic Chat: Route & Delegate ───────────
 
     def chat(self, user_message: str, context: Dict = None) -> Dict:
@@ -78,6 +175,16 @@ class Orchestrator:
         result["agent_label"] = agent_labels.get(agent_key, agent_key)
         result["agent_name"] = agent.agent_name
         result["routing_reasoning"] = routing.get("reasoning", "")
+
+        if result.get("escalated"):
+            case = self._create_escalation_case(
+                user_message=user_message,
+                context=context,
+                agent_key=agent_key,
+                agent_label=result["agent_label"],
+                result_data=result,
+            )
+            result["escalation_id"] = case.get("case_id")
         return result
 
     def chat_stream(self, user_message: str, context: Dict = None):
@@ -145,6 +252,16 @@ class Orchestrator:
         result_data["agent_label"] = agent_labels.get(agent_key, agent_key)
         result_data["agent_name"] = agent.agent_name
         result_data["routing_reasoning"] = routing.get("reasoning", "")
+
+        if result_data.get("escalated"):
+            case = self._create_escalation_case(
+                user_message=user_message,
+                context=context,
+                agent_key=agent_key,
+                agent_label=result_data["agent_label"],
+                result_data=result_data,
+            )
+            result_data["escalation_id"] = case.get("case_id")
         yield result_data
 
     # ─────────── Task Routing ───────────
@@ -346,5 +463,16 @@ Return ONLY a JSON object: {{"agent": "hr|it|finance|compliance", "reasoning": "
     def get_completed_workflows(self) -> List[Dict]:
         return self.completed_workflows[-20:]  # last 20
 
-    def get_escalation_queue(self) -> List[Dict]:
-        return self.escalation_queue
+    def get_escalation_queue(self, status: Optional[str] = None) -> List[Dict]:
+        if not status:
+            return self.escalation_queue
+        return [e for e in self.escalation_queue if e.get("status") == status]
+
+    def get_escalation_metrics(self) -> Dict:
+        open_cases = len([e for e in self.escalation_queue if e.get("status") == "Open"])
+        resolved_cases = len([e for e in self.escalation_queue if e.get("status") == "Resolved"])
+        return {
+            "open": open_cases,
+            "resolved": resolved_cases,
+            "total": len(self.escalation_queue),
+        }

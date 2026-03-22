@@ -133,6 +133,8 @@ class BaseAgent(ABC):
         reasoning = plan.get("reasoning", "")
         confidence = float(plan.get("confidence", 0.7))
         steps = plan.get("steps", [])
+        requires_human = bool(plan.get("requires_human", False))
+        human_reason = plan.get("human_reason", "Sensitive request requiring human review")
 
         planning_steps.append({
             "step": "Planning",
@@ -140,7 +142,34 @@ class BaseAgent(ABC):
             "detail": f"Tools: {', '.join(s.get('tool', '?') for s in steps)} (confidence: {confidence:.0%})"
         })
 
-        # ── 3. CHECK ESCALATION ───────────────────────────────────
+        # ── 3. CHECK HUMAN-REQUIRED ESCALATION ──────────────────
+        if requires_human:
+            self.log_action("Escalated to Human", {
+                "request": user_message,
+                "reasoning": reasoning,
+                "confidence": confidence,
+                "human_reason": human_reason
+            })
+            planning_steps.append({
+                "step": "Escalation",
+                "status": "completed",
+                "detail": f"Human review required — {human_reason}"
+            })
+            return {
+                "response": ("This request requires human HR involvement due to its sensitivity. "
+                             "I've escalated it for immediate review.\n\n"
+                             f"Reason: {human_reason}"),
+                "actions_taken": [],
+                "planning_steps": planning_steps,
+                "reasoning": reasoning,
+                "confidence": confidence,
+                "escalated": True,
+                "escalation_reason": human_reason,
+                "human_reason": human_reason,
+                "escalation_type": "policy_sensitive"
+            }
+
+        # ── 4. CHECK CONFIDENCE ESCALATION ───────────────────────
         if confidence < ESCALATION_CONFIDENCE_THRESHOLD:
             self.log_action("Escalated to Human", {
                 "request": user_message, "reasoning": reasoning,
@@ -160,10 +189,13 @@ class BaseAgent(ABC):
                 "planning_steps": planning_steps,
                 "reasoning": reasoning,
                 "confidence": confidence,
-                "escalated": True
+                "escalated": True,
+                "escalation_reason": f"Low confidence ({confidence:.0%})",
+                "human_reason": "",
+                "escalation_type": "low_confidence"
             }
 
-        # ── 4. ACT — execute each planned step ───────────────────
+        # ── 5. ACT — execute each planned step ───────────────────
         for step in steps:
             tool_name = step.get("tool")
             tool_params = step.get("parameters", {})
@@ -216,7 +248,7 @@ class BaseAgent(ABC):
                     "detail": f"Tool '{tool_name}' not found"
                 })
 
-        # ── 5. EVALUATE & RESPOND — LLM crafts final answer ──────
+        # ── 6. EVALUATE & RESPOND — LLM crafts final answer ──────
         response = self._evaluate_and_respond(
             user_message, reasoning, actions_taken, plan.get("direct_response", ""))
 
@@ -226,7 +258,7 @@ class BaseAgent(ABC):
             "detail": f"Generating response (confidence: {confidence:.0%})"
         })
 
-        # ── 6. LEARN — record this decision ───────────────────────
+        # ── 7. LEARN — record this decision ───────────────────────
         outcome = "success" if all(a.get("success", True) for a in actions_taken) else "partial_failure"
         self.learning.record_decision(
             task=user_message,
@@ -238,7 +270,7 @@ class BaseAgent(ABC):
         self.log_decision(user_message, [a["tool"] for a in actions_taken],
                           reasoning, confidence, outcome)
 
-        # ── 7. UPDATE GOALS ───────────────────────────────────────
+        # ── 8. UPDATE GOALS ───────────────────────────────────────
         self._update_goals(actions_taken)
 
         return {
@@ -297,6 +329,8 @@ class BaseAgent(ABC):
         reasoning = plan.get("reasoning", "")
         confidence = float(plan.get("confidence", 0.7))
         steps = plan.get("steps", [])
+        requires_human = bool(plan.get("requires_human", False))
+        human_reason = plan.get("human_reason", "Sensitive request requiring human review")
 
         yield {
             "type": "step",
@@ -307,7 +341,38 @@ class BaseAgent(ABC):
             }
         }
 
-        # ── 3. CHECK ESCALATION ───────────────────────────────────
+        # ── 3. CHECK HUMAN-REQUIRED ESCALATION ──────────────────
+        if requires_human:
+            self.log_action("Escalated to Human", {
+                "request": user_message,
+                "reasoning": reasoning,
+                "confidence": confidence,
+                "human_reason": human_reason
+            })
+            yield {
+                "type": "step",
+                "step": {
+                    "step": "Escalation",
+                    "status": "completed",
+                    "detail": f"Human review required — {human_reason}"
+                }
+            }
+            yield {
+                "type": "result",
+                "response": ("This request requires human HR involvement due to its sensitivity. "
+                             "I've escalated it for immediate review.\n\n"
+                             f"Reason: {human_reason}"),
+                "actions_taken": [],
+                "reasoning": reasoning,
+                "confidence": confidence,
+                "escalated": True,
+                "escalation_reason": human_reason,
+                "human_reason": human_reason,
+                "escalation_type": "policy_sensitive"
+            }
+            return
+
+        # ── 4. CHECK CONFIDENCE ESCALATION ───────────────────────
         if confidence < ESCALATION_CONFIDENCE_THRESHOLD:
             self.log_action("Escalated to Human", {
                 "request": user_message, "reasoning": reasoning,
@@ -330,11 +395,14 @@ class BaseAgent(ABC):
                 "actions_taken": [],
                 "reasoning": reasoning,
                 "confidence": confidence,
-                "escalated": True
+                "escalated": True,
+                "escalation_reason": f"Low confidence ({confidence:.0%})",
+                "human_reason": "",
+                "escalation_type": "low_confidence"
             }
             return
 
-        # ── 4. ACT ───────────────────────────────────────────────
+        # ── 5. ACT ───────────────────────────────────────────────
         for step in steps:
             tool_name = step.get("tool")
             tool_params = step.get("parameters", {})
@@ -398,7 +466,7 @@ class BaseAgent(ABC):
                     }
                 }
 
-        # ── 5. EVALUATE & RESPOND ─────────────────────────────────
+        # ── 6. EVALUATE & RESPOND ─────────────────────────────────
         response = self._evaluate_and_respond(
             user_message, reasoning, actions_taken, plan.get("direct_response", ""))
 
@@ -411,7 +479,7 @@ class BaseAgent(ABC):
             }
         }
 
-        # ── 6. LEARN ──────────────────────────────────────────────
+        # ── 7. LEARN ──────────────────────────────────────────────
         outcome = "success" if all(a.get("success", True) for a in actions_taken) else "partial_failure"
         self.learning.record_decision(
             task=user_message,
@@ -423,7 +491,7 @@ class BaseAgent(ABC):
         self.log_decision(user_message, [a["tool"] for a in actions_taken],
                           reasoning, confidence, outcome)
 
-        # ── 7. UPDATE GOALS ───────────────────────────────────────
+        # ── 8. UPDATE GOALS ───────────────────────────────────────
         self._update_goals(actions_taken)
 
         yield {
@@ -467,6 +535,18 @@ class BaseAgent(ABC):
                 for d in past
             ]
 
+        admin_overrides = self.learning.get_relevant_overrides(user_message, n=3)
+        if admin_overrides:
+            perception["similar_admin_overrides"] = [
+                {
+                    "task": o.get("task"),
+                    "admin_decision": o.get("admin_decision"),
+                    "reason": o.get("reason"),
+                    "context": o.get("context", {})
+                }
+                for o in admin_overrides
+            ]
+
         # Allow subclass to add domain-specific context
         perception.update(self._get_domain_context(user_message, context))
 
@@ -481,7 +561,13 @@ class BaseAgent(ABC):
     def _reason_and_plan(self, user_message: str, perception: Dict) -> Dict:
         """
         Call 1: LLM analyzes the situation and produces a plan.
-        Returns: {"reasoning": str, "confidence": float, "steps": [{"tool": str, "parameters": {}}]}
+                Returns: {
+                    "reasoning": str,
+                    "confidence": float,
+                    "requires_human": bool,
+                    "human_reason": str,
+                    "steps": [{"tool": str, "parameters": {}}]
+                }
         """
         tools_desc = self.get_tools_description()
 
@@ -494,6 +580,15 @@ class BaseAgent(ABC):
                 for d in past
             )
             past_snippet = f"\nSimilar Past Decisions (learn from these):\n{examples}\n"
+
+        overrides_snippet = ""
+        overrides = perception.get("similar_admin_overrides", [])
+        if overrides:
+            examples = "\n".join(
+                f"  - Task: {o.get('task')} → Admin Decision: {o.get('admin_decision')} (reason: {o.get('reason')})"
+                for o in overrides
+            )
+            overrides_snippet = f"\nAdmin Override Guidance (high priority):\n{examples}\n"
 
         employee_snippet = ""
         emp = perception.get("employee")
@@ -512,7 +607,7 @@ class BaseAgent(ABC):
 TASK: Analyze the user's request and decide what action(s) to take.
 
 USER REQUEST: "{user_message}"
-{employee_snippet}{past_snippet}{domain_snippet}
+{employee_snippet}{past_snippet}{overrides_snippet}{domain_snippet}
 AVAILABLE TOOLS:
 {tools_desc}
 
@@ -521,11 +616,14 @@ INSTRUCTIONS:
 2. Decide which tool(s) to call (or "no_tool_needed" for conversational responses)
 3. Extract the required parameters from the user's message and context
 4. Assess your confidence (0.0 to 1.0)
+5. Decide if this request requires human involvement regardless of confidence
 
 Return ONLY a valid JSON object in this exact format:
 {{
   "reasoning": "Your step-by-step reasoning about what the user needs and why you chose this action",
   "confidence": 0.85,
+    "requires_human": false,
+    "human_reason": "",
   "steps": [
     {{"tool": "tool_name", "parameters": {{"param1": "value1", "param2": "value2"}}}}
   ],
@@ -538,6 +636,12 @@ RULES:
 - For date parameters, use YYYY-MM-DD format
 - If the request is purely informational/conversational, use tool "no_tool_needed" with empty parameters
 - You may plan multiple steps if the request requires sequential actions
+- Set "requires_human" to true for sensitive requests needing immediate human handling, including harassment,
+  discrimination, threats/violence, legal accusations, retaliation, requests to fire/demote specific people, or any
+  disciplinary action beyond tool scope.
+- If requires_human is true, provide a short concrete "human_reason" and keep steps minimal.
+- If Admin Override Guidance includes a clearly similar case, follow that decision pattern unless current context
+    has materially higher risk.
 """
 
         try:
@@ -551,6 +655,10 @@ RULES:
                     plan["reasoning"] = "Processing request"
                 if "confidence" not in plan:
                     plan["confidence"] = 0.7
+                if "requires_human" not in plan:
+                    plan["requires_human"] = False
+                if "human_reason" not in plan:
+                    plan["human_reason"] = ""
                 if "steps" not in plan:
                     plan["steps"] = [{"tool": "no_tool_needed", "parameters": {}}]
                 return plan
