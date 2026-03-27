@@ -41,7 +41,8 @@ class LearningModule:
 
     def record_override(self, decision_id: str, original_decision: str,
                         admin_decision: str, reason: str,
-                        task: str = None, context: Dict = None):
+                        task: str = None, context: Dict = None,
+                        employee_response: str = None):
         """Admin overrides agent decision — high-value learning signal."""
         override = {
             "decision_id": decision_id,
@@ -49,6 +50,7 @@ class LearningModule:
             "timestamp": datetime.now().isoformat(),
             "original_decision": original_decision,
             "admin_decision": admin_decision,
+            "employee_response": employee_response,
             "reason": reason,
             "task": task,
             "context": context or {},

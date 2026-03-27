@@ -11,6 +11,80 @@ class FinanceAgent(BaseAgent):
 
     def __init__(self, db, llm_service, event_bus=None):
         super().__init__(agent_name="Finance Agent", database=db, llm_service=llm_service, event_bus=event_bus)
+        self._register_tools()
+
+    def _register_tools(self):
+        """Register all finance methods as autonomous tools."""
+        self.register_tool(
+            name="submit_expense",
+            description="Submit a new employee expense claim.",
+            parameters={
+                "employee_id": "str — employee ID",
+                "category": "str — expense category",
+                "amount": "float — expense amount",
+                "description": "str — expense description",
+                "receipt_path": "str — optional receipt path",
+            },
+            function=self.submit_expense,
+            requires_employee_id=True,
+        )
+        self.register_tool(
+            name="approve_expense",
+            description="Approve or reject an expense claim.",
+            parameters={
+                "expense_id": "str — expense ID",
+                "approved_by": "str — approver name",
+                "decision": "str — Approved|Rejected",
+                "notes": "str — notes",
+            },
+            function=self.approve_expense,
+        )
+        self.register_tool(
+            name="get_expense_status",
+            description="Get current status for an expense ID.",
+            parameters={"expense_id": "str — expense ID"},
+            function=self.get_expense_status,
+        )
+        self.register_tool(
+            name="process_payroll",
+            description="Process payroll for a month/year.",
+            parameters={
+                "month": "str — month value",
+                "year": "int — year value",
+            },
+            function=self.process_payroll,
+        )
+        self.register_tool(
+            name="get_payroll_summary",
+            description="Fetch payroll summary for a month/year.",
+            parameters={
+                "month": "str — month value",
+                "year": "int — year value",
+            },
+            function=self.get_payroll_summary,
+        )
+        self.register_tool(
+            name="manage_budget",
+            description="View or allocate department budgets.",
+            parameters={
+                "department": "str — department name",
+                "action": "str — view|allocate",
+                "amount": "float — budget amount (allocate)",
+            },
+            function=self.manage_budget,
+        )
+        self.register_tool(
+            name="process_reimbursement",
+            description="Process reimbursement for an approved expense.",
+            parameters={"expense_id": "str — expense ID"},
+            function=self.process_reimbursement,
+        )
+        self.register_tool(
+            name="ask_finance_policy",
+            description="Answer finance policy questions.",
+            parameters={"question": "str — policy question"},
+            function=self.ask_finance_policy,
+        )
 
     def get_capabilities(self) -> List[str]:
         return [

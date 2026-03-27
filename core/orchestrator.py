@@ -153,6 +153,7 @@ Requirements:
                 decision_id=case.get("case_id", ""),
                 original_decision=original_decision,
                 admin_decision=admin_decision_text,
+                employee_response=case.get("employee_response"),
                 reason=admin_reason,
                 task=case.get("request", ""),
                 context={

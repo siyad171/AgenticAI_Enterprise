@@ -206,3 +206,38 @@ def test_requires_human_can_use_learned_override_without_escalation(orchestrator
     assert result["escalated"] is False
     assert result.get("learning_applied") is True
     assert result["response"] == learned_response
+
+
+def test_learned_override_prefers_employee_response(orchestrator, monkeypatch):
+    hr_agent = orchestrator.agents["hr"]
+    task = "manager complaint escalation natural response test"
+
+    hr_agent.learning.record_override(
+        decision_id="ESC-EMP-RESP-001",
+        original_decision="Sensitive HR action",
+        admin_decision="Ask employee to email hr with details and be empathetic",
+        employee_response=(
+            "I am sorry to hear this. Please email HR with full details so our specialist "
+            "team can support you through the formal process."
+        ),
+        reason="Sensitive concerns must be handled through specialist HR process",
+        task=task,
+        context={"escalation_type": "policy_sensitive", "agent": "hr"},
+    )
+
+    def fake_plan(_user_message, _perception):
+        return {
+            "reasoning": "Sensitive HR request detected.",
+            "confidence": 0.95,
+            "requires_human": True,
+            "human_reason": "Manager disciplinary action is sensitive.",
+            "steps": [],
+            "direct_response": "",
+        }
+
+    monkeypatch.setattr(hr_agent, "_reason_and_plan", fake_plan)
+
+    result = hr_agent.process_request(task, context={"employee_id": "EMP001"})
+
+    assert result["escalated"] is False
+    assert "please email hr with full details" in result["response"].lower()

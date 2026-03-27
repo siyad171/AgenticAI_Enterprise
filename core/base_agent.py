@@ -9,8 +9,9 @@ Agentic AI Features (LIVE):
 - Environment Perception (handle_event via EventBus)
 """
 from abc import ABC, abstractmethod
+import os
 from typing import Dict, List, Tuple, Optional, Callable, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 import json, re, traceback
 
 from core.database import AuditLog
@@ -96,8 +97,11 @@ class BaseAgent(ABC):
         if not admin_decision:
             admin_decision = "Proceed according to previously approved admin guidance."
 
-        # Use the learned admin decision as the employee-facing response.
-        response = admin_decision
+        response = self._build_employee_response_from_override(
+            user_message=user_message,
+            matched_override=matched,
+            fallback_decision=admin_decision,
+        )
 
         learned_reasoning = (
             f"Low-confidence reasoning was superseded by learned admin override {decision_id}. "
@@ -129,6 +133,45 @@ class BaseAgent(ABC):
             "reasoning": learned_reasoning,
             "learning_source_decision_id": decision_id,
         }
+
+    def _build_employee_response_from_override(self, user_message: str,
+                                               matched_override: Dict,
+                                               fallback_decision: str) -> str:
+        employee_response = (matched_override.get("employee_response") or "").strip()
+        if employee_response:
+            return employee_response
+
+        admin_decision = (matched_override.get("admin_decision") or fallback_decision or "").strip()
+        admin_reason = (matched_override.get("reason") or "").strip()
+
+        if not admin_decision:
+            return "Your request has been reviewed and routed for appropriate manual handling."
+
+        # Keep tests deterministic and avoid network calls.
+        if os.getenv("TESTING") == "1":
+            return admin_decision
+
+        rewrite_prompt = f"""Rewrite this internal instruction as an employee-facing response.
+
+Employee request: {user_message}
+Instruction: {admin_decision}
+Rationale: {admin_reason or 'N/A'}
+
+Requirements:
+- 2-4 concise sentences in natural language.
+- Empathetic and professional tone.
+- Preserve intent exactly.
+- Do not mention internal prompts, tools, or command wording.
+"""
+        try:
+            rewritten = self.llm.generate_response(
+                rewrite_prompt,
+                f"You are {self.agent_name}. Write clear employee-facing support responses.",
+            )
+            rewritten = (rewritten or "").strip()
+            return rewritten or admin_decision
+        except Exception:
+            return admin_decision
 
     # ═══════════════════════════════════════════════════════════════
     #  ReAct LOOP — the core agentic reasoning engine
@@ -342,17 +385,32 @@ class BaseAgent(ABC):
                     "detail": "No tool needed — direct response"
                 })
             else:
-                actions_taken.append({
-                    "tool": tool_name or "unknown",
-                    "parameters": tool_params,
-                    "result": {"status": "error", "message": f"Tool '{tool_name}' not found"},
-                    "success": False
-                })
-                planning_steps.append({
-                    "step": "Executing",
-                    "status": "failed",
-                    "detail": f"Tool '{tool_name}' not found"
-                })
+                alias_result = self._try_execute_tool_alias(tool_name, tool_params, perception)
+                if alias_result is not None:
+                    alias_success = alias_result.get("status") != "error"
+                    actions_taken.append({
+                        "tool": tool_name or "unknown",
+                        "parameters": tool_params,
+                        "result": alias_result,
+                        "success": alias_success
+                    })
+                    planning_steps.append({
+                        "step": "Executing",
+                        "status": "completed" if alias_success else "failed",
+                        "detail": f"{tool_name} alias handled -> {alias_result.get('message', alias_result.get('status', 'done'))}"
+                    })
+                else:
+                    actions_taken.append({
+                        "tool": tool_name or "unknown",
+                        "parameters": tool_params,
+                        "result": {"status": "error", "message": f"Tool '{tool_name}' not found"},
+                        "success": False
+                    })
+                    planning_steps.append({
+                        "step": "Executing",
+                        "status": "failed",
+                        "detail": f"Tool '{tool_name}' not found"
+                    })
 
         # ── 6. EVALUATE & RESPOND — LLM crafts final answer ──────
         response = self._evaluate_and_respond(
@@ -627,20 +685,38 @@ class BaseAgent(ABC):
                     }
                 }
             else:
-                actions_taken.append({
-                    "tool": tool_name or "unknown",
-                    "parameters": tool_params,
-                    "result": {"status": "error", "message": f"Tool '{tool_name}' not found"},
-                    "success": False
-                })
-                yield {
-                    "type": "step",
-                    "step": {
-                        "step": "Executing",
-                        "status": "failed",
-                        "detail": f"Tool '{tool_name}' not found"
+                alias_result = self._try_execute_tool_alias(tool_name, tool_params, perception)
+                if alias_result is not None:
+                    alias_success = alias_result.get("status") != "error"
+                    actions_taken.append({
+                        "tool": tool_name or "unknown",
+                        "parameters": tool_params,
+                        "result": alias_result,
+                        "success": alias_success
+                    })
+                    yield {
+                        "type": "step",
+                        "step": {
+                            "step": "Executing",
+                            "status": "completed" if alias_success else "failed",
+                            "detail": f"{tool_name} alias handled -> {alias_result.get('message', alias_result.get('status', 'done'))}"
+                        }
                     }
-                }
+                else:
+                    actions_taken.append({
+                        "tool": tool_name or "unknown",
+                        "parameters": tool_params,
+                        "result": {"status": "error", "message": f"Tool '{tool_name}' not found"},
+                        "success": False
+                    })
+                    yield {
+                        "type": "step",
+                        "step": {
+                            "step": "Executing",
+                            "status": "failed",
+                            "detail": f"Tool '{tool_name}' not found"
+                        }
+                    }
 
         # ── 6. EVALUATE & RESPOND ─────────────────────────────────
         response = self._evaluate_and_respond(
@@ -732,6 +808,149 @@ class BaseAgent(ABC):
         """Override in subclass to add domain-specific context (e.g., leave balances, open tickets)."""
         return {}
 
+    def _extract_first_json_object(self, text: str) -> Optional[str]:
+        """Extract the first balanced JSON object from free-form text."""
+        if not text:
+            return None
+
+        start = text.find("{")
+        if start < 0:
+            return None
+
+        depth = 0
+        in_string = False
+        escaped = False
+
+        for i in range(start, len(text)):
+            ch = text[i]
+
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+
+        return None
+
+    def _parse_plan_payload(self, raw: str) -> Optional[Dict]:
+        """Parse planner JSON from raw LLM output with multiple extraction strategies."""
+        if not raw:
+            return None
+
+        candidates = []
+        stripped = raw.strip()
+        candidates.append(stripped)
+
+        # Handle fenced blocks first.
+        fenced = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", stripped, flags=re.IGNORECASE)
+        candidates.extend(fenced)
+
+        greedy_match = re.search(r"\{[\s\S]*\}", stripped)
+        if greedy_match:
+            candidates.append(greedy_match.group(0))
+
+        balanced = self._extract_first_json_object(stripped)
+        if balanced:
+            candidates.append(balanced)
+
+        seen = set()
+        for c in candidates:
+            blob = (c or "").strip()
+            if not blob or blob in seen:
+                continue
+            seen.add(blob)
+            try:
+                plan = json.loads(blob)
+                if isinstance(plan, dict):
+                    return plan
+            except Exception:
+                continue
+        return None
+
+    def _normalize_plan(self, plan: Dict) -> Dict:
+        """Ensure plan has required keys and safe defaults."""
+        normalized = dict(plan or {})
+        normalized.setdefault("reasoning", "Processing request")
+        normalized.setdefault("confidence", 0.7)
+        normalized.setdefault("requires_human", False)
+        normalized.setdefault("human_reason", "")
+        normalized.setdefault("direct_response", "")
+
+        steps = normalized.get("steps")
+        if not isinstance(steps, list) or not steps:
+            steps = [{"tool": "no_tool_needed", "parameters": {}}]
+        normalized["steps"] = steps
+        return normalized
+
+    def _build_heuristic_plan(self, user_message: str, perception: Dict,
+                              parse_error: str = "") -> Dict:
+        """Fallback planner when LLM JSON is malformed; avoids unnecessary escalations."""
+        msg_lower = (user_message or "").lower()
+        employee = perception.get("employee", {})
+        employee_id = employee.get("id")
+
+        steps = [{"tool": "no_tool_needed", "parameters": {}}]
+        reasoning = "Used safe fallback planning because LLM returned malformed JSON."
+
+        ticket_id_match = re.search(r"\bTKT\d+\b", user_message or "", flags=re.IGNORECASE)
+
+        if ticket_id_match and "get_ticket_status" in self._tools:
+            steps = [{
+                "tool": "get_ticket_status",
+                "parameters": {"ticket_id": ticket_id_match.group(0).upper()}
+            }]
+            reasoning += " Detected ticket ID and selected get_ticket_status."
+        elif any(k in msg_lower for k in ["ticket", "tickets", "status", "open"]) and "get_open_tickets_summary" in self._tools:
+            steps = [{"tool": "get_open_tickets_summary", "parameters": {}}]
+            reasoning += " Selected get_open_tickets_summary for ticket status query."
+        elif any(k in msg_lower for k in ["not working", "shutdown", "overheating", "error", "issue", "problem"]) and "create_ticket" in self._tools:
+            if employee_id:
+                category = "Other"
+                if any(k in msg_lower for k in ["fan", "laptop", "hardware", "keyboard", "screen", "battery"]):
+                    category = "Hardware"
+                elif any(k in msg_lower for k in ["network", "wifi", "vpn"]):
+                    category = "Network"
+                elif any(k in msg_lower for k in ["security", "phishing", "malware"]):
+                    category = "Security"
+                elif any(k in msg_lower for k in ["software", "install", "application", "app"]):
+                    category = "Software"
+                steps = [{
+                    "tool": "create_ticket",
+                    "parameters": {
+                        "employee_id": employee_id,
+                        "category": category,
+                        "description": user_message,
+                        "priority": "Medium"
+                    }
+                }]
+                reasoning += " Selected create_ticket with inferred category."
+            else:
+                reasoning += " Missing employee context; returning conversational response."
+
+        if parse_error:
+            reasoning += f" Parse error: {parse_error[:180]}"
+
+        return {
+            "reasoning": reasoning,
+            "confidence": 0.75,
+            "requires_human": False,
+            "human_reason": "",
+            "steps": steps,
+            "direct_response": ""
+        }
+
     # ─────────── REASON & PLAN: LLM decides what to do ───────────
 
     def _reason_and_plan(self, user_message: str, perception: Dict) -> Dict:
@@ -822,32 +1041,41 @@ RULES:
 
         try:
             raw = self.llm.generate_json_response(prompt)
-            # Extract JSON from response
-            m = re.search(r'\{[\s\S]*\}', raw)
-            if m:
-                plan = json.loads(m.group(0))
-                # Validate structure
-                if "reasoning" not in plan:
-                    plan["reasoning"] = "Processing request"
-                if "confidence" not in plan:
-                    plan["confidence"] = 0.7
-                if "requires_human" not in plan:
-                    plan["requires_human"] = False
-                if "human_reason" not in plan:
-                    plan["human_reason"] = ""
-                if "steps" not in plan:
-                    plan["steps"] = [{"tool": "no_tool_needed", "parameters": {}}]
-                return plan
-            else:
-                return {
-                    "error": f"Could not parse LLM plan: {raw[:200]}",
-                    "fallback_response": self._generate_fallback(user_message)
-                }
+            plan = self._parse_plan_payload(raw)
+            if plan:
+                return self._normalize_plan(plan)
+
+            # One repair retry if the first payload is malformed.
+            repair_prompt = f"""Your previous output could not be parsed as valid JSON.
+Return ONLY one valid JSON object with this exact schema and no extra text:
+{{
+  "reasoning": "...",
+  "confidence": 0.0,
+  "requires_human": false,
+  "human_reason": "",
+  "steps": [{{"tool": "tool_name", "parameters": {{}}}}],
+  "direct_response": ""
+}}
+
+User request: {user_message}
+Available tools: {', '.join(self._tools.keys())}
+"""
+            repaired_raw = self.llm.generate_json_response(repair_prompt)
+            repaired_plan = self._parse_plan_payload(repaired_raw)
+            if repaired_plan:
+                return self._normalize_plan(repaired_plan)
+
+            return self._build_heuristic_plan(
+                user_message=user_message,
+                perception=perception,
+                parse_error="Planner returned malformed JSON twice"
+            )
         except Exception as e:
-            return {
-                "error": f"Planning error: {str(e)}",
-                "fallback_response": self._generate_fallback(user_message)
-            }
+            return self._build_heuristic_plan(
+                user_message=user_message,
+                perception=perception,
+                parse_error=str(e)
+            )
 
     # ─────────── EXECUTE: run a tool ───────────
 
@@ -863,6 +1091,97 @@ RULES:
                 valid_params[k] = v
         result = tool.function(**valid_params)
         return result if isinstance(result, dict) else {"status": "success", "result": result}
+
+    def _try_execute_tool_alias(self, tool_name: str, params: Dict, perception: Dict) -> Optional[Dict]:
+        """Compatibility layer for common planner tool aliases not present in registry."""
+        alias = (tool_name or "").strip().lower()
+
+        # Finance alias: expense_report -> summarize employee expense claims.
+        if alias in {"expense_report", "get_expense_report", "expense_summary", "get_expense_summary"}:
+            employee_id = params.get("employee_id")
+            if not employee_id:
+                employee = perception.get("employee", {})
+                employee_id = employee.get("id")
+
+            if not employee_id:
+                return {
+                    "status": "error",
+                    "message": "expense_report requires employee_id context"
+                }
+
+            if not hasattr(self.db, "get_employee_expenses"):
+                return {
+                    "status": "error",
+                    "message": "Expense report data source is unavailable"
+                }
+
+            claims = self.db.get_employee_expenses(employee_id) or []
+            claim_rows = []
+            total_amount = 0.0
+            for c in claims[-10:]:
+                amount = float(getattr(c, "amount", 0.0) or 0.0)
+                total_amount += amount
+                claim_rows.append({
+                    "claim_id": getattr(c, "claim_id", "N/A"),
+                    "category": getattr(c, "category", "N/A"),
+                    "amount": amount,
+                    "status": getattr(c, "status", "N/A"),
+                    "submitted_date": getattr(c, "submitted_date", "N/A"),
+                })
+
+            return {
+                "status": "success",
+                "employee_id": employee_id,
+                "total_claims": len(claims),
+                "reported_claims": len(claim_rows),
+                "total_amount_reported": round(total_amount, 2),
+                "claims": claim_rows,
+                "message": "Expense report generated"
+            }
+
+        # Compliance alias: Training Management System -> schedule_training.
+        if alias in {"training management system", "training_system", "training manager"}:
+            if "schedule_training" not in self._tools:
+                return None
+
+            employee_id = params.get("employee_id")
+            if not employee_id:
+                employee = perception.get("employee", {})
+                employee_id = employee.get("id")
+
+            if not employee_id:
+                return {
+                    "status": "error",
+                    "message": "Training scheduling requires employee_id context"
+                }
+
+            training_type = (
+                params.get("training_type")
+                or params.get("course")
+                or params.get("title")
+                or "General Compliance Training"
+            )
+            due_date = params.get("due_date") or params.get("date")
+            if not due_date:
+                due_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+
+            mandatory = params.get("mandatory", True)
+            if isinstance(mandatory, str):
+                mandatory = mandatory.strip().lower() not in {"false", "0", "no"}
+
+            schedule_tool = self._tools["schedule_training"]
+            result = schedule_tool.function(
+                employee_id=employee_id,
+                training_type=training_type,
+                due_date=due_date,
+                mandatory=mandatory,
+            )
+            if isinstance(result, dict):
+                result.setdefault("message", "Training scheduled via alias mapping")
+                return result
+            return {"status": "success", "result": result, "message": "Training scheduled via alias mapping"}
+
+        return None
 
     # ─────────── EVALUATE & RESPOND: craft final answer ───────────
 
@@ -904,12 +1223,52 @@ Do NOT mention tool names or internal system details. Speak naturally as an agen
         try:
             response = self.llm.generate_response(prompt,
                 f"You are a helpful {self.agent_name} assistant. Respond naturally and concisely.")
-            return response
+            return self._append_structured_tool_details(response, actions_taken)
         except Exception:
             # Fallback: build a simple response from results
             if actions_taken and actions_taken[0].get("success"):
-                return f"Done! I've processed your request. {reasoning}"
+                fallback = f"Done! I've processed your request. {reasoning}"
+                return self._append_structured_tool_details(fallback, actions_taken)
             return f"I attempted to process your request but encountered an issue. {reasoning}"
+
+    def _append_structured_tool_details(self, response: str, actions_taken: list) -> str:
+        """Append critical structured details so key tool outputs are always visible."""
+        final_response = (response or "").strip()
+
+        # Guarantee leave history visibility when that tool succeeds.
+        leave_action = next(
+            (
+                a for a in actions_taken
+                if a.get("tool") == "get_leave_history" and a.get("success")
+            ),
+            None,
+        )
+        if leave_action:
+            data = leave_action.get("result", {}) or {}
+            requests = data.get("leave_requests", []) or []
+            total = data.get("total", len(requests))
+
+            lines = ["", "Leave history (system record):"]
+            if not requests:
+                lines.append("- No prior leave requests found.")
+            else:
+                for req in requests[-3:]:
+                    leave_type = req.get("type", "N/A")
+                    start = req.get("start", "N/A")
+                    end = req.get("end", "N/A")
+                    status = req.get("status", "N/A")
+                    request_id = req.get("request_id", "N/A")
+                    lines.append(
+                        f"- {request_id}: {leave_type} ({start} to {end}) - {status}"
+                    )
+                if total > 3:
+                    lines.append(f"- Showing latest 3 of {total} total leave requests.")
+
+            structured_block = "\n".join(lines)
+            if "Leave history (system record):" not in final_response:
+                final_response = (final_response + structured_block).strip()
+
+        return final_response
 
     # ─────────── FALLBACK (when LLM reasoning fails) ───────────
 
