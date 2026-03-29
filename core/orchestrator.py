@@ -7,7 +7,7 @@ Agentic AI Features:
 - Agentic Delegation (routes chat to agent's process_request ReAct loop)
 - Escalation (confidence < threshold → human review)
 """
-import json, re
+import json, re, os
 from datetime import datetime
 from typing import Dict, List, Optional
 from core.base_agent import BaseAgent
@@ -26,6 +26,149 @@ class Orchestrator:
         self.active_workflows: Dict[str, Dict] = {}
         self.completed_workflows: List[Dict] = []
         self.escalation_queue: List[Dict] = []
+
+    # - - - - - - - - - Escalation lifecycle - - - - - - - - -
+
+    def _create_escalation_case(self, user_message: str, context: Dict,
+                                agent_key: str, agent_label: str,
+                                result_data: Dict) -> Dict:
+        timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')
+        case_id = f"ESC-{timestamp}"
+        employee_id = context.get("employee_id")
+
+        employee_name = "Unknown"
+        try:
+            if employee_id:
+                db = next(iter(self.agents.values())).db
+                emp = db.get_employee(employee_id)
+                if emp:
+                    employee_name = emp.name
+        except Exception:
+            pass
+
+        case = {
+            "case_id": case_id,
+            "status": "Open",
+            "created_at": datetime.now().isoformat(),
+            "request": user_message,
+            "employee_id": employee_id,
+            "employee_name": employee_name,
+            "agent": agent_key,
+            "agent_label": agent_label,
+            "confidence": float(result_data.get("confidence", 0.0) or 0.0),
+            "reasoning": result_data.get("reasoning", ""),
+            "escalation_reason": result_data.get("escalation_reason", ""),
+            "human_reason": result_data.get("human_reason", ""),
+            "escalation_type": result_data.get("escalation_type", ""),
+            "proposed_response": result_data.get("response", ""),
+            "context": context,
+            "admin_decision": None,
+            "admin_decision_type": None,
+            "admin_reason": None,
+            "employee_response": None,
+            "resolved_by": None,
+            "resolved_at": None,
+            "learning_recorded": False,
+        }
+        self.escalation_queue.append(case)
+        return case
+
+    def _generate_employee_resolution_response(self, agent: BaseAgent, case: Dict) -> str:
+        """Build the final employee-facing response using the responsible domain agent."""
+        admin_decision = (case.get("admin_decision") or "").strip()
+        admin_reason = (case.get("admin_reason") or "").strip()
+        decision_type = case.get("admin_decision_type") or "custom"
+
+        # Keep tests deterministic and avoid external dependency calls.
+        if os.getenv("TESTING") == "1":
+            return admin_decision or "Your request was reviewed by admin and has been resolved."
+
+        if not admin_decision:
+            return "Your request was reviewed by admin and has been resolved."
+
+        prompt = f"""Create the final employee-facing response for this resolved escalation.
+
+Employee request: {case.get("request", "")}
+Escalation reason: {case.get("escalation_reason") or case.get("human_reason") or "N/A"}
+Admin decision type: {decision_type}
+Admin decision content: {admin_decision}
+Admin rationale: {admin_reason or "N/A"}
+
+Requirements:
+- 2-4 concise, professional sentences.
+- Natural language that the employee can understand.
+- Reflect the admin decision accurately.
+- Do not mention internal tools, prompts, or implementation details.
+"""
+
+        try:
+            generated = agent.llm.generate_response(
+                prompt,
+                f"You are {agent.agent_name}. Draft clear enterprise support responses.",
+            )
+            return (generated or "").strip() or admin_decision
+        except Exception:
+            return admin_decision
+
+    def resolve_escalation(self, case_id: str, admin_decision: str,
+                           reason: str, resolved_by: str = "Admin",
+                           decision_type: str = "custom") -> Dict:
+        case = next((c for c in self.escalation_queue if c.get("case_id") == case_id), None)
+        if not case:
+            return {"status": "error", "message": f"Escalation case {case_id} not found"}
+
+        case["status"] = "Resolved"
+        case["admin_decision"] = admin_decision
+        case["admin_decision_type"] = decision_type
+        case["admin_reason"] = reason
+        case["resolved_by"] = resolved_by
+        case["resolved_at"] = datetime.now().isoformat()
+
+        agent = self.agents.get(case.get("agent"))
+        if agent:
+            case["employee_response"] = self._generate_employee_resolution_response(agent, case)
+        else:
+            case["employee_response"] = admin_decision
+
+        learning_result = self._record_admin_learning(case)
+        return {
+            "status": "success",
+            "case_id": case_id,
+            "learning_recorded": learning_result.get("status") == "success",
+            "learning_message": learning_result.get("message", "")
+        }
+
+    def _record_admin_learning(self, case: Dict) -> Dict:
+        agent_key = case.get("agent")
+        agent = self.agents.get(agent_key)
+        if not agent:
+            return {"status": "error", "message": f"Unknown agent: {agent_key}"}
+
+        original_decision = case.get("reasoning") or case.get("escalation_reason") or "Escalated to human review"
+        admin_decision_text = case.get("admin_decision", "")
+        admin_reason = case.get("admin_reason", "")
+
+        try:
+            agent.learning.record_override(
+                decision_id=case.get("case_id", ""),
+                original_decision=original_decision,
+                admin_decision=admin_decision_text,
+                employee_response=case.get("employee_response"),
+                reason=admin_reason,
+                task=case.get("request", ""),
+                context={
+                    "employee_id": case.get("employee_id"),
+                    "escalation_reason": case.get("escalation_reason"),
+                    "escalation_type": case.get("escalation_type"),
+                    "admin_decision_type": case.get("admin_decision_type"),
+                    "agent_confidence": case.get("confidence"),
+                    "agent": agent_key,
+                },
+            )
+            case["learning_recorded"] = True
+            return {"status": "success", "message": "Admin decision persisted to learning memory"}
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to persist learning: {e}"}
 
     # ─────────── Agentic Chat: Route & Delegate ───────────
 
@@ -78,7 +221,94 @@ class Orchestrator:
         result["agent_label"] = agent_labels.get(agent_key, agent_key)
         result["agent_name"] = agent.agent_name
         result["routing_reasoning"] = routing.get("reasoning", "")
+
+        if result.get("escalated"):
+            case = self._create_escalation_case(
+                user_message=user_message,
+                context=context,
+                agent_key=agent_key,
+                agent_label=result["agent_label"],
+                result_data=result,
+            )
+            result["escalation_id"] = case.get("case_id")
         return result
+
+    def chat_stream(self, user_message: str, context: Dict = None):
+        """
+        Streaming generator version of chat().
+        Yields {"type": "step", "step": {...}} for each planning step as it completes.
+        Finally yields {"type": "result", ...} with the full response payload.
+        """
+        context = context or {}
+
+        agent_labels = {
+            "hr": "🏥 HR Agent",
+            "it": "🔧 IT Agent",
+            "finance": "💰 Finance Agent",
+            "compliance": "📋 Compliance Agent",
+        }
+
+        # Step 1: Route (LLM call — yield routing step as soon as it returns)
+        routing = self.route_task(user_message, context)
+        agent_key = routing.get("agent", "hr")
+        agent = self.agents.get(agent_key)
+
+        yield {
+            "type": "step",
+            "step": {
+                "step": "Routing",
+                "status": "completed",
+                "detail": f"Routed to {agent_labels.get(agent_key, agent_key)}"
+            }
+        }
+
+        if not agent:
+            yield {
+                "type": "result",
+                "response": "I couldn't determine which department can help with this. Could you provide more details?",
+                "agent": "unknown",
+                "agent_label": "🤖 AI",
+                "actions_taken": [],
+                "reasoning": "",
+                "confidence": 0.0,
+                "escalated": False,
+                "routing_reasoning": routing.get("reasoning", "")
+            }
+            return
+
+        # Step 2: Stream steps from the agent's ReAct loop
+        result_data = None
+        for item in agent.process_request_stream(user_message, context):
+            if item["type"] == "step":
+                yield item
+            elif item["type"] == "result":
+                result_data = item
+
+        if result_data is None:
+            result_data = {
+                "type": "result",
+                "response": "An unexpected error occurred. Please try again.",
+                "actions_taken": [],
+                "reasoning": "",
+                "confidence": 0.0,
+                "escalated": False
+            }
+
+        result_data["agent"] = agent_key
+        result_data["agent_label"] = agent_labels.get(agent_key, agent_key)
+        result_data["agent_name"] = agent.agent_name
+        result_data["routing_reasoning"] = routing.get("reasoning", "")
+
+        if result_data.get("escalated"):
+            case = self._create_escalation_case(
+                user_message=user_message,
+                context=context,
+                agent_key=agent_key,
+                agent_label=result_data["agent_label"],
+                result_data=result_data,
+            )
+            result_data["escalation_id"] = case.get("case_id")
+        yield result_data
 
     # ─────────── Task Routing ───────────
 
@@ -279,5 +509,16 @@ Return ONLY a JSON object: {{"agent": "hr|it|finance|compliance", "reasoning": "
     def get_completed_workflows(self) -> List[Dict]:
         return self.completed_workflows[-20:]  # last 20
 
-    def get_escalation_queue(self) -> List[Dict]:
-        return self.escalation_queue
+    def get_escalation_queue(self, status: Optional[str] = None) -> List[Dict]:
+        if not status:
+            return self.escalation_queue
+        return [e for e in self.escalation_queue if e.get("status") == status]
+
+    def get_escalation_metrics(self) -> Dict:
+        open_cases = len([e for e in self.escalation_queue if e.get("status") == "Open"])
+        resolved_cases = len([e for e in self.escalation_queue if e.get("status") == "Resolved"])
+        return {
+            "open": open_cases,
+            "resolved": resolved_cases,
+            "total": len(self.escalation_queue),
+        }
