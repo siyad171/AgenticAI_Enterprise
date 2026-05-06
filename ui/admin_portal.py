@@ -93,6 +93,7 @@ def _employee_management():
 
 def _candidate_review():
     db = st.session_state.db
+    agent = st.session_state.agents['hr']
     st.header("📋 Candidate Review")
     if not db.candidates:
         st.info("No candidates yet")
@@ -119,6 +120,31 @@ def _candidate_review():
     llm_service = st.session_state.get("llm")
     compare = st.checkbox("Compare with benchmark", value=True)
     show_candidate_report(candidate, llm_service=llm_service, compare=compare)
+
+    # ── Accept Candidate Section ──────────────────────────────
+    st.divider()
+    st.subheader("✅ Hiring Decision")
+
+    if candidate.status == "Hired":
+        st.success("✅ Candidate already hired")
+    else:
+        col1, col2, col3 = st.columns(3)
+
+        if col1.button("✅ Accept Candidate", type="primary", use_container_width=True):
+            result = _accept_candidate(agent, db, candidate)
+            if result.get("success"):
+                st.success(result.get("message"))
+                st.session_state['refresh_admin'] = True
+            else:
+                st.error(result.get("message"))
+
+        if col2.button("⏸️ Keep Under Review", use_container_width=True):
+            candidate.status = "Under Review"
+            st.info("✓ Candidate marked as under review")
+
+        if col3.button("❌ Reject", use_container_width=True):
+            candidate.status = "Rejected"
+            st.warning("✓ Candidate rejected")
 
 
 def _audit_report():
@@ -367,3 +393,105 @@ def _run_admin_assistant(prompt: str) -> str:
         "I can help with escalation operations. Try: 'show open escalations', "
         "'show escalation stats', or 'resolve ESC-<id> approve because <reason>'."
     )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Accept Candidate Helper
+# ════════════════════════════════════════════════════════════════════════════
+
+def _accept_candidate(agent, db, candidate) -> dict:
+    """Accept a candidate, create employee account, send login credentials."""
+    import string
+    import secrets
+    
+    try:
+        # Generate username (first name + last name initial + random)
+        first_name = candidate.name.split()[0].lower() if candidate.name else "user"
+        last_initial = candidate.name.split()[-1][0].lower() if len(candidate.name.split()) > 1 else "x"
+        random_suffix = ''.join(secrets.choice(string.digits) for _ in range(3))
+        username = f"{first_name}.{last_initial}{random_suffix}"
+        
+        # Generate strong password (12 chars: uppercase, lowercase, digits, special)
+        chars = string.ascii_letters + string.digits + "!@#$%"
+        password = ''.join(secrets.choice(chars) for _ in range(12))
+        
+        # Create employee record
+        from core.database import Employee
+        emp_id = f"EMP{len(db.employees) + 1:04d}"
+        employee = Employee(
+            employee_id=emp_id,
+            name=candidate.name,
+            email=candidate.email,
+            department="Unknown",  # Can be updated from position later
+            position=candidate.applied_position,
+            join_date=datetime.date.today().isoformat(),
+            leave_balance={
+                "Casual Leave": 12,
+                "Sick Leave": 15,
+                "Annual Leave": 20,
+            }
+        )
+        db.add_employee(employee)
+        
+        # Create user account
+        from core.database import User
+        user = User(
+            username=username,
+            password=password,
+            role="Employee",
+            employee_id=emp_id
+        )
+        db.add_user(user)
+        
+        # Send email with credentials
+        subject = f"Welcome to {candidate.applied_position} — Employee Portal Login"
+        body = (
+            f"Dear {candidate.name},\n\n"
+            f"Congratulations! You have been accepted for the {candidate.applied_position} position.\n\n"
+            f"We are excited to have you on the team! Your employment has been activated and you can now "
+            f"access the Employee Portal.\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"EMPLOYEE PORTAL LOGIN CREDENTIALS\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Portal URL: [Your application URL]\n"
+            f"Username: {username}\n"
+            f"Password: {password}\n\n" 
+            f"Employee ID: {emp_id}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"⚠️ IMPORTANT SECURITY NOTES:\n"
+            f"• Keep your password confidential and do not share it with anyone\n"
+            f"• Change your password on first login\n"
+            f"• For password reset, contact the HR Department\n\n"
+            f"Once you log in, you will be able to:\n"
+            f"• View and manage leave requests\n"
+            f"• Update your profile information\n"
+            f"• Access company policies and documents\n"
+            f"• Submit IT support tickets\n"
+            f"• Track expense claims\n\n"
+            f"If you have any questions or need assistance, please contact HR at hr@company.com\n\n"
+            f"Best regards,\n"
+            f"HR Department\n"
+            f"Agentic AI Enterprise"
+        )
+        
+        email_result = agent.email.send_email(candidate.email, subject, body)
+        
+        if email_result.get("status") != "success":
+            return {
+                "success": False,
+                "message": f"Could not send credentials email: {email_result.get('message')}"
+            }
+        
+        # Update candidate status
+        candidate.status = "Hired"
+        
+        return {
+            "success": True,
+            "message": f"✅ Candidate accepted! Employee ID: {emp_id} | Username: {username} | Email sent with login credentials"
+        }
+    
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Error accepting candidate: {str(e)}"
+        }

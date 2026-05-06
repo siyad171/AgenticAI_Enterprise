@@ -41,6 +41,7 @@ def show_candidate_portal():
         from ui.video_interview_ui import show_video_interview
         show_video_interview()
     elif step == "complete":
+        _send_completion_email_once(agent, db)
         st.success("🎉 Application complete! You will be notified by email.")
         if st.button("← Back to Login"):
             from ui.utils import logout
@@ -269,6 +270,57 @@ def _show_mcq_result(agent, db):
         if st.button("← Back to Application"):
             st.session_state.candidate_step = "application"
             st.rerun()
+
+
+# ═══════════════════════════════════════════════════════════════
+# Email Completion Notification
+# ═══════════════════════════════════════════════════════════════
+
+def _send_completion_email_once(agent, db):
+    """Send completion email exactly once per candidate (deduped by session state)."""
+    cand_id = st.session_state.get("current_candidate_id")
+    if not cand_id:
+        return
+    
+    # Dedup key: track if we already sent for this candidate in this session
+    dedup_key = f"completion_email_sent_{cand_id}"
+    if st.session_state.get(dedup_key):
+        return  # Already sent in this session
+    
+    try:
+        candidate = db.get_candidate(cand_id)
+        if not candidate or not candidate.email:
+            return
+        
+        # Prepare email content
+        subject = "Application Process Complete"
+        body = (
+            f"Dear {candidate.name},\n\n"
+            f"Thank you for completing your application for the {candidate.applied_position} position!\n\n"
+            f"Application ID: {cand_id}\n"
+            f"Position: {candidate.applied_position}\n\n"
+            f"Your complete interview process has been successfully recorded, including:\n"
+            f"• Initial application and resume review\n"
+            f"• MCQ knowledge assessment\n"
+            f"• Technical interview\n"
+            f"• Psychometric assessment\n"
+            f"• Video interview\n\n"
+            f"Our hiring team will now review your submission and contact you shortly with updates.\n\n"
+            f"Best regards,\nHR Department\n"
+            f"Agentic AI Enterprise"
+        )
+        
+        # Send via agent's EmailService (uses SMTP configured in .env)
+        result = agent.email.send_email(candidate.email, subject, body)
+        
+        # Mark as sent in session to prevent duplicates on Streamlit reruns
+        if result.get("status") == "success":
+            st.session_state[dedup_key] = True
+            st.success("✅ Confirmation email sent successfully.")
+        else:
+            st.warning(f"⚠️ Email notification: {result.get('message', 'Unknown error')}")
+    except Exception as e:
+        st.warning(f"⚠️ Could not send email: {str(e)}")
 
 
 # _show_technical_choice removed — candidates go directly to AI chat interview

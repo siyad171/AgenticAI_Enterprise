@@ -28,6 +28,12 @@ class HRAgent(BaseAgent):
     def _register_tools(self):
         """Register all HR methods as autonomous tools."""
         self.register_tool(
+            name="emergency_medical_handler",
+            description="Handle medical/safety emergencies: provide first aid, notify services, email HR/manager.",
+            parameters={},
+            function=self._handle_emergency_wrapper
+        )
+        self.register_tool(
             name="process_leave_request",
             description="Process an employee's leave request. Validates balance, checks date conflicts, auto-approves ≤10 days, sends email notification.",
             parameters={
@@ -309,6 +315,151 @@ class HRAgent(BaseAgent):
         if any(w in q for w in ["conduct", "behavior", "dress"]):
             policies.append("Code of Conduct")
         return policies
+
+    # ═════════════════════════════════════════════════════════════════════
+    # Emergency Detection Override — intercept planning before tool selection
+    # ═════════════════════════════════════════════════════════════════════
+    def _reason_and_plan(self, user_message: str, perception: Dict) -> Dict:
+        """Override to detect emergencies early and bypass normal planning."""
+        # Check for medical/safety emergencies first
+        msg_lower = (user_message or "").lower()
+        emergency_keywords = [
+            "heart attack", "cardiac arrest", "unconscious", "not breathing",
+            "collapsed", "seizure", "chest pain", "bleeding heavily", "serious injury"
+        ]
+        if any(k in msg_lower for k in emergency_keywords):
+            # Store message and perception for wrapper to use
+            self._last_message = user_message
+            self._last_context = {"perception": perception}
+            # Return a special plan that signals emergency handling
+            return {
+                "reasoning": "Medical emergency detected — skipping normal tool planning",
+                "confidence": 0.99,
+                "requires_human": False,
+                "human_reason": "",
+                "steps": [{"tool": "emergency_medical_handler", "parameters": {}}],
+                "direct_response": ""
+            }
+        
+        # Otherwise use parent planning
+        return super()._reason_and_plan(user_message, perception)
+
+    # ═════════════════════════════════════════════════════════════════════
+    # Emergency handling (medical / safety incidents)
+    # ═════════════════════════════════════════════════════════════════════
+    def process_request(self, user_message: str, context: Dict = None) -> Dict:
+        """Override to intercept emergency situations and handle immediately."""
+        context = context or {}
+        # Detect emergency either from routing context or message keywords
+        emergency_flag = bool(context.get('emergency', False))
+        msg_lower = (user_message or "").lower()
+        emergency_keywords = [
+            "heart attack", "cardiac arrest", "unconscious", "not breathing",
+            "collapsed", "seizure", "chest pain", "bleeding heavily", "serious injury"
+        ]
+        if emergency_flag or any(k in msg_lower for k in emergency_keywords):
+            return self._handle_emergency_flow(user_message, context)
+
+        # Default to base behavior
+        return super().process_request(user_message, context)
+
+    def _handle_emergency_flow(self, user_message: str, context: Dict = None) -> Dict:
+        """Perform emergency-first actions: give first-aid steps, notify emergency services (simulated),
+        notify HR/manager by email, and log the incident.
+        Returns a response payload similar to process_request.
+        """
+        context = context or {}
+        planning_steps = []
+
+        # Perceive employee if possible
+        perception = self._perceive(user_message, context)
+        emp = perception.get('employee') or {}
+        planning_steps.append({"step": "Perceiving", "status": "completed",
+                               "detail": f"Employee: {emp.get('name','Unknown')}, Dept: {emp.get('department','Unknown')}"})
+
+        # Immediate first-aid guidance (concise)
+        first_aid = (
+            "If someone is having a suspected heart attack: \n"
+            "1) Call emergency services immediately (call your local emergency number / ambulance).\n"
+            "2) If the person is unresponsive and not breathing, start CPR (push hard and fast in the center of the chest).\n"
+            "3) If an AED is available, turn it on and follow prompts.\n"
+            "4) Loosen tight clothing, keep the person comfortable and monitor breathing until help arrives.\n"
+            "5) Do not give food or drink.\n"
+        )
+
+        # Notify emergency services (simulated) and HR/manager
+        actions_taken = []
+        # Simulated emergency call
+        actions_taken.append({"tool": "notify_emergency_services", "result": {"status": "success", "message": "Emergency services notified (simulated)"}})
+        planning_steps.append({"step": "Executing", "status": "completed", "detail": "notify_emergency_services → simulated call"})
+
+        # Send email notification to HR and manager (if available)
+        subject = "URGENT: Medical Emergency Reported"
+        employee_name = emp.get('name') or "Unknown"
+        employee_email = emp.get('email') or context.get('email') or ""
+        body = (
+            f"An emergency has been reported regarding {employee_name}.\n\n"
+            f"Context / Report: {user_message}\n\n"
+            f"Please take immediate action. Emergency services have been notified (simulated).\n\n"
+            f"Employee details: {json.dumps(emp, default=str)}\n\n"
+            "This is an automated notification from the HR Agent."
+        )
+        # Send to HR inbox and employee's email (if available)
+        recipients = ["hr@company.com"]
+        if employee_email:
+            recipients.append(employee_email)
+
+        email_results = []
+        for r in recipients:
+            try:
+                res = self.email.send_email(r, subject, body)
+            except Exception as e:
+                res = {"status": "error", "message": str(e)}
+            email_results.append({"to": r, "result": res})
+
+        actions_taken.append({"tool": "email_notifications", "result": {"status": "success", "details": email_results}})
+        planning_steps.append({"step": "Executing", "status": "completed", "detail": f"email_notifications → sent to {', '.join(recipients)}"})
+
+        # Publish event for other systems (if available)
+        try:
+            if self.event_bus:
+                self.event_bus.publish("medical_emergency", {"report": user_message, "employee": emp})
+                planning_steps.append({"step": "Executing", "status": "completed", "detail": "Published medical_emergency event"})
+        except Exception:
+            planning_steps.append({"step": "Executing", "status": "failed", "detail": "Failed to publish event"})
+
+        # Log action
+        self.log_action("Medical Emergency Reported", {"report": user_message, "employee": emp}, emp.get('id') or "Unknown")
+
+        # Build response shown to user (empathetic + actionable)
+        response = (
+            f"I understand — this sounds like a medical emergency regarding {employee_name}. "
+            "Please call emergency services now (or ask someone nearby to call). "
+            "I've notified HR and emergency services (simulated).\n\n"
+            "Immediate steps to help: \n" + first_aid + "\n"
+            "If you want, I can also create an incident record or notify specific managers."
+        )
+
+        planning_steps.append({"step": "Evaluating", "status": "completed", "detail": "Generated emergency response"})
+
+        return {
+            "response": response,
+            "actions_taken": actions_taken,
+            "planning_steps": planning_steps,
+            "reasoning": "Emergency handler executed",
+            "confidence": 0.99,
+            "escalated": False
+        }
+
+    def _handle_emergency_wrapper(self) -> Dict:
+        """Wrapper for emergency_medical_handler tool that bridges perception context to emergency flow.
+        Called by the tool execution framework when emergency is detected."""
+        # Extract the last user message from perception (stored during _reason_and_plan)
+        user_message = getattr(self, '_last_message', 'medical emergency reported')
+        context = getattr(self, '_last_context', {})
+        
+        # Call the full emergency flow handler
+        return self._handle_emergency_flow(user_message, context)
 
     # ══════════════════════════════════════════════════════════════
     #  4.  GENERATE AUDIT REPORT

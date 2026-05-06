@@ -188,7 +188,7 @@ Requirements:
             "compliance": "📋 Compliance Agent",
         }
 
-        # Step 1: Route to the right agent
+        # Step 1: Route to the right agent (emergency detection included)
         routing = self.route_task(user_message, context)
         agent_key = routing.get("agent", "hr")
         agent = self.agents.get(agent_key)
@@ -213,6 +213,11 @@ Requirements:
             }
 
         # Step 2: Delegate to the agent's agentic process_request
+        # Propagate emergency flag (if detected during routing)
+        if routing.get('emergency'):
+            if context is None:
+                context = {}
+            context['emergency'] = True
         result = agent.process_request(user_message, context)
 
         # Prepend routing step to the agent's planning_steps
@@ -277,6 +282,12 @@ Requirements:
             return
 
         # Step 2: Stream steps from the agent's ReAct loop
+        # Propagate emergency flag to agent
+        if routing.get('emergency'):
+            if context is None:
+                context = {}
+            context['emergency'] = True
+
         result_data = None
         for item in agent.process_request_stream(user_message, context):
             if item["type"] == "step":
@@ -314,6 +325,15 @@ Requirements:
 
     def route_task(self, task_description: str, context: Dict = None) -> Dict:
         """Use LLM to determine which agent should handle a task."""
+        # Quick emergency keyword detection — route to HR immediately and mark emergency
+        task_lower = (task_description or "").lower()
+        emergency_keywords = [
+            "heart attack", "cardiac arrest", "unconscious", "not breathing",
+            "collapsed", "seizure", "chest pain", "bleeding heavily", "serious injury"
+        ]
+        if any(k in task_lower for k in emergency_keywords):
+            return {"agent": "hr", "reasoning": "Emergency detected (keyword match)", "emergency": True}
+
         agent_list = "\n".join(
             f"- {name}: {', '.join(agent.get_capabilities())}"
             for name, agent in self.agents.items()
