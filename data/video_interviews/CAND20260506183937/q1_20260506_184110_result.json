@@ -1,0 +1,191 @@
+{
+  "question": "Tell us about yourself and explain why you're interested in this role.",
+  "question_id": "VQ_01",
+  "audio_file": "C:\\Users\\KALLAI\\Desktop\\Github clone\\Updated\\AgenticAI_Enterprise\\data\\video_interviews\\CAND20260506183937\\q1_20260506_184110.wav",
+  "video_file": "C:\\Users\\KALLAI\\Desktop\\Github clone\\Updated\\AgenticAI_Enterprise\\data\\video_interviews\\CAND20260506183937\\q1_20260506_184110.avi",
+  "duration_seconds": 17.3,
+  "transcript": "And now we gonna end here it isasan or something that makes you feel shy it's no no point behind there and by doing that it's hard for me and be out of the way holding glasses it could be jaw surgery wait",
+  "emotions": {
+    "available": true,
+    "timeline": [
+      {
+        "second": 1,
+        "emotion": "fear",
+        "scores": {
+          "angry": 0.0,
+          "disgust": 0.0,
+          "fear": 76.85,
+          "happy": 20.75,
+          "sad": 2.4,
+          "surprise": 0.0,
+          "neutral": 0.0
+        }
+      },
+      {
+        "second": 2,
+        "emotion": "fear",
+        "scores": {
+          "angry": 0.1,
+          "disgust": 0.0,
+          "fear": 53.51,
+          "happy": 5.54,
+          "sad": 10.72,
+          "surprise": 0.0,
+          "neutral": 30.13
+        }
+      },
+      {
+        "second": 3,
+        "emotion": "fear",
+        "scores": {
+          "angry": 0.01,
+          "disgust": 0.0,
+          "fear": 74.73,
+          "happy": 20.53,
+          "sad": 4.57,
+          "surprise": 0.0,
+          "neutral": 0.16
+        }
+      },
+      {
+        "second": 4,
+        "emotion": "fear",
+        "scores": {
+          "angry": 0.15,
+          "disgust": 0.0,
+          "fear": 67.2,
+          "happy": 26.99,
+          "sad": 5.61,
+          "surprise": 0.0,
+          "neutral": 0.05
+        }
+      },
+      {
+        "second": 5,
+        "emotion": "fear",
+        "scores": {
+          "angry": 19.45,
+          "disgust": 0.0,
+          "fear": 36.49,
+          "happy": 0.0,
+          "sad": 31.83,
+          "surprise": 0.11,
+          "neutral": 12.12
+        }
+      },
+      {
+        "second": 6,
+        "emotion": "neutral",
+        "scores": {
+          "angry": 10.92,
+          "disgust": 0.0,
+          "fear": 10.1,
+          "happy": 0.0,
+          "sad": 16.87,
+          "surprise": 0.01,
+          "neutral": 62.1
+        }
+      },
+      {
+        "second": 7,
+        "emotion": "neutral",
+        "scores": {
+          "angry": 11.89,
+          "disgust": 0.0,
+          "fear": 13.19,
+          "happy": 0.01,
+          "sad": 15.59,
+          "surprise": 0.08,
+          "neutral": 59.25
+        }
+      },
+      {
+        "second": 8,
+        "emotion": "fear",
+        "scores": {
+          "angry": 0.0,
+          "disgust": 0.01,
+          "fear": 69.85,
+          "happy": 20.34,
+          "sad": 9.55,
+          "surprise": 0.0,
+          "neutral": 0.25
+        }
+      },
+      {
+        "second": 9,
+        "emotion": "neutral",
+        "scores": {
+          "angry": 3.1,
+          "disgust": 0.0,
+          "fear": 30.91,
+          "happy": 0.01,
+          "sad": 13.72,
+          "surprise": 0.21,
+          "neutral": 52.05
+        }
+      },
+      {
+        "second": 10,
+        "emotion": "fear",
+        "scores": {
+          "angry": 0.0,
+          "disgust": 0.01,
+          "fear": 50.39,
+          "happy": 21.79,
+          "sad": 27.76,
+          "surprise": 0.0,
+          "neutral": 0.05
+        }
+      },
+      {
+        "second": 11,
+        "emotion": "fear",
+        "scores": {
+          "angry": 0.0,
+          "disgust": 0.0,
+          "fear": 83.42,
+          "happy": 0.94,
+          "sad": 15.6,
+          "surprise": 0.0,
+          "neutral": 0.03
+        }
+      },
+      {
+        "second": 12,
+        "emotion": "fear",
+        "scores": {
+          "angry": 0.0,
+          "disgust": 0.0,
+          "fear": 99.78,
+          "happy": 0.0,
+          "sad": 0.22,
+          "surprise": 0.0,
+          "neutral": 0.0
+        }
+      }
+    ],
+    "distribution": {
+      "fear": 9,
+      "neutral": 3
+    },
+    "positivity": 25.0,
+    "nervousness": 75.0,
+    "confidence": 25.0,
+    "frames_analyzed": 12
+  },
+  "evaluation": {
+    "criteria_scores": {
+      "communication": 0,
+      "enthusiasm": 0,
+      "relevance": 0,
+      "clarity": 0
+    },
+    "overall_score": 0,
+    "feedback": "The candidate's response was unclear and lacked coherence, making it difficult to understand their qualifications or interest in the role. To improve, the candidate should practice articulating their thoughts and experiences in a clear and concise manner. Additionally, the candidate should ensure they are prepared to discuss their relevant skills and experiences.",
+    "recommendation": "No Hire"
+  },
+  "final_score": 7.5,
+  "recommendation": "No Hire",
+  "timestamp": "2026-05-06T18:41:19.673529"
+}

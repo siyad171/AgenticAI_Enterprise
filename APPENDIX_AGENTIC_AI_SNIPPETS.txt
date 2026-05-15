@@ -1,0 +1,368 @@
+APPENDIX: AGENTIC AI CODE SNIPPETS
+Project: AgenticAI_Enterprise
+Generated on: 2026-03-22
+
+====================================================================
+Snippet 1: Core ReAct Loop (Perceive -> Plan -> Act -> Evaluate -> Learn)
+Source: core/base_agent.py
+Why this snippet: Shows the complete autonomous decision pipeline.
+====================================================================
+
+def process_request(self, user_message: str, context: Dict = None) -> Dict:
+    context = context or {}
+    actions_taken = []
+    planning_steps = []
+
+    # 1) PERCEIVE
+    perception = self._perceive(user_message, context)
+    emp = perception.get("employee", {})
+    planning_steps.append({
+        "step": "Perceiving",
+        "status": "completed",
+        "detail": f"Employee: {emp.get('name', 'N/A')}, Dept: {emp.get('department', 'N/A')}"
+    })
+
+    # 2) REASON & PLAN
+    plan = self._reason_and_plan(user_message, perception)
+
+    reasoning = plan.get("reasoning", "")
+    confidence = float(plan.get("confidence", 0.7))
+    steps = plan.get("steps", [])
+    requires_human = bool(plan.get("requires_human", False))
+
+    # 3) POLICY/SENSITIVITY ESCALATION
+    if requires_human:
+        return {
+            "response": "This request requires human involvement.",
+            "actions_taken": [],
+            "planning_steps": planning_steps,
+            "reasoning": reasoning,
+            "confidence": confidence,
+            "escalated": True,
+        }
+
+    # 4) LOW-CONFIDENCE ESCALATION
+    if confidence < ESCALATION_CONFIDENCE_THRESHOLD:
+        return {
+            "response": "Low-confidence case escalated to human review.",
+            "actions_taken": [],
+            "planning_steps": planning_steps,
+            "reasoning": reasoning,
+            "confidence": confidence,
+            "escalated": True,
+        }
+
+    # 5) ACT
+    for step in steps:
+        tool_name = step.get("tool")
+        tool_params = step.get("parameters", {})
+        if tool_name and tool_name in self._tools:
+            result = self._execute_tool(tool_name, tool_params)
+            success = result.get("status") != "error"
+            actions_taken.append({
+                "tool": tool_name,
+                "parameters": tool_params,
+                "result": result,
+                "success": success
+            })
+
+    # 6) EVALUATE & RESPOND
+    response = self._evaluate_and_respond(
+        user_message, reasoning, actions_taken, plan.get("direct_response", "")
+    )
+
+    # 7) LEARN
+    outcome = "success" if all(a.get("success", True) for a in actions_taken) else "partial_failure"
+    self.learning.record_decision(
+        task=user_message,
+        context={"perception": perception, "tools_used": [a["tool"] for a in actions_taken]},
+        decision=reasoning,
+        confidence=confidence,
+        outcome=outcome
+    )
+
+    # 8) KPI UPDATE
+    self._update_goals(actions_taken)
+
+    return {
+        "response": response,
+        "actions_taken": actions_taken,
+        "planning_steps": planning_steps,
+        "reasoning": reasoning,
+        "confidence": confidence,
+        "escalated": False
+    }
+
+
+====================================================================
+Snippet 2: LLM Planning Prompt and Structured JSON Plan Contract
+Source: core/base_agent.py
+Why this snippet: Shows how autonomous planning is constrained and machine-parseable.
+====================================================================
+
+def _reason_and_plan(self, user_message: str, perception: Dict) -> Dict:
+    tools_desc = self.get_tools_description()
+
+    prompt = f"""You are {self.agent_name}, an autonomous AI agent in an enterprise system.
+
+TASK: Analyze the user's request and decide what action(s) to take.
+
+USER REQUEST: "{user_message}"
+AVAILABLE TOOLS:
+{tools_desc}
+
+INSTRUCTIONS:
+1. Reason about what the user needs
+2. Decide which tool(s) to call (or "no_tool_needed" for conversational responses)
+3. Extract required parameters from message/context
+4. Assess confidence (0.0 to 1.0)
+5. Decide if this request requires human involvement
+
+Return ONLY a valid JSON object in this exact format:
+{{
+  "reasoning": "step-by-step reasoning",
+  "confidence": 0.85,
+  "requires_human": false,
+  "human_reason": "",
+  "steps": [
+    {{"tool": "tool_name", "parameters": {{"param1": "value1"}}}}
+  ],
+  "direct_response": "If no tool is needed"
+}}
+"""
+
+    raw = self.llm.generate_json_response(prompt)
+    m = re.search(r'\{[\s\S]*\}', raw)
+    if m:
+        plan = json.loads(m.group(0))
+        if "steps" not in plan:
+            plan["steps"] = [{"tool": "no_tool_needed", "parameters": {}}]
+        return plan
+    return {"error": "Could not parse LLM plan"}
+
+
+====================================================================
+Snippet 3: Intelligent Task Routing with LLM + Keyword Fallback
+Source: core/orchestrator.py
+Why this snippet: Demonstrates robust routing strategy in unified assistant.
+====================================================================
+
+def route_task(self, task_description: str, context: Dict = None) -> Dict:
+    agent_list = "\n".join(
+        f"- {name}: {', '.join(agent.get_capabilities())}"
+        for name, agent in self.agents.items()
+    )
+
+    prompt = f"""You are a task router for an enterprise AI system. Route this request.
+
+Available Agents:
+{agent_list}
+
+User Request: "{task_description}"
+Return ONLY JSON: {{"agent": "hr|it|finance|compliance", "reasoning": "brief reason"}}
+"""
+
+    try:
+        response = self.llm.generate_json_response(prompt)
+        m = re.search(r'\{[^{}]*\}', response)
+        if m:
+            data = json.loads(m.group(0))
+            agent_key = data.get("agent", "").lower()
+            if agent_key in self.agents:
+                return {"agent": agent_key, "reasoning": data.get("reasoning", "")}
+    except Exception:
+        pass
+
+    # Fallback rules
+    task_lower = task_description.lower()
+    if any(w in task_lower for w in ["leave", "onboard", "hire", "policy"]):
+        return {"agent": "hr", "reasoning": "Keyword match: HR-related request"}
+    if any(w in task_lower for w in ["ticket", "access", "vpn", "password"]):
+        return {"agent": "it", "reasoning": "Keyword match: IT-related request"}
+    if any(w in task_lower for w in ["expense", "budget", "payroll", "salary"]):
+        return {"agent": "finance", "reasoning": "Keyword match: Finance-related request"}
+    if any(w in task_lower for w in ["compliance", "violation", "audit", "training"]):
+        return {"agent": "compliance", "reasoning": "Keyword match: Compliance-related request"}
+
+    return {"agent": "hr", "reasoning": "Default routing to HR"}
+
+
+====================================================================
+Snippet 4: Escalation Case Creation and Admin Resolution Learning Loop
+Source: core/orchestrator.py
+Why this snippet: Shows human-in-the-loop and feedback-to-learning pipeline.
+====================================================================
+
+def _create_escalation_case(self, user_message: str, context: Dict,
+                            agent_key: str, agent_label: str,
+                            result_data: Dict) -> Dict:
+    case_id = f"ESC-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+    case = {
+        "case_id": case_id,
+        "status": "Open",
+        "request": user_message,
+        "employee_id": context.get("employee_id"),
+        "agent": agent_key,
+        "agent_label": agent_label,
+        "confidence": float(result_data.get("confidence", 0.0) or 0.0),
+        "reasoning": result_data.get("reasoning", ""),
+        "escalation_reason": result_data.get("escalation_reason", ""),
+        "human_reason": result_data.get("human_reason", ""),
+        "admin_decision": None,
+        "admin_reason": None,
+        "learning_recorded": False,
+    }
+    self.escalation_queue.append(case)
+    return case
+
+
+def resolve_escalation(self, case_id: str, admin_decision: str,
+                       reason: str, resolved_by: str = "Admin") -> Dict:
+    case = next((c for c in self.escalation_queue if c.get("case_id") == case_id), None)
+    if not case:
+        return {"status": "error", "message": f"Escalation case {case_id} not found"}
+
+    case["status"] = "Resolved"
+    case["admin_decision"] = admin_decision
+    case["admin_reason"] = reason
+    case["resolved_by"] = resolved_by
+    case["resolved_at"] = datetime.now().isoformat()
+
+    learning_result = self._record_admin_learning(case)
+    return {
+        "status": "success",
+        "case_id": case_id,
+        "learning_recorded": learning_result.get("status") == "success",
+    }
+
+
+====================================================================
+Snippet 5: Event-Driven Multi-Agent Coordination (Pub/Sub)
+Source: core/event_bus.py
+Why this snippet: Captures autonomous inter-agent communication backbone.
+====================================================================
+
+class EventBus:
+    def __init__(self):
+        self._subscribers: Dict[str, List[Callable]] = defaultdict(list)
+        self._event_log: List[Dict] = []
+
+    def subscribe(self, event_type: str, callback: Callable):
+        self._subscribers[event_type].append(callback)
+
+    def publish(self, event_type: str, data: Dict, source_agent: str = "System"):
+        event = {
+            "type": event_type,
+            "data": data,
+            "source": source_agent,
+            "timestamp": datetime.now().isoformat(),
+        }
+        self._event_log.append(event)
+
+        for callback in self._subscribers.get(event_type, []):
+            try:
+                callback(event_type, data)
+            except Exception as e:
+                print(f"[EventBus] Handler error for '{event_type}': {e}")
+
+
+====================================================================
+Snippet 6: Continuous Learning and Override Memory
+Source: core/learning_module.py
+Why this snippet: Demonstrates persistent learning from outcomes and human correction.
+====================================================================
+
+class LearningModule:
+    def record_decision(self, task: str, context: Dict, decision: str,
+                        confidence: float, outcome: str = None):
+        entry = {
+            "id": f"DEC-{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
+            "agent": self.agent_name,
+            "timestamp": datetime.now().isoformat(),
+            "task": task,
+            "context": context,
+            "decision": decision,
+            "confidence": confidence,
+            "outcome": outcome,
+        }
+        self.decisions.append(entry)
+        self._save_history()
+
+    def record_override(self, decision_id: str, original_decision: str,
+                        admin_decision: str, reason: str,
+                        task: str = None, context: Dict = None):
+        override = {
+            "decision_id": decision_id,
+            "agent": self.agent_name,
+            "timestamp": datetime.now().isoformat(),
+            "original_decision": original_decision,
+            "admin_decision": admin_decision,
+            "reason": reason,
+            "task": task,
+            "context": context or {},
+        }
+        self.overrides.append(override)
+        self._save_history()
+
+    def get_relevant_examples(self, current_task: str, n: int = 3) -> List[Dict]:
+        keywords = set(current_task.lower().split())
+        scored = []
+        for d in self.decisions:
+            task_words = set(d["task"].lower().split())
+            overlap = len(keywords & task_words)
+            if overlap > 0:
+                scored.append((overlap, d))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [d for _, d in scored[:n]]
+
+
+====================================================================
+Snippet 7: Streaming Agent Planning in UI (Transparent Reasoning)
+Source: ui/employee_portal.py
+Why this snippet: Demonstrates live, user-visible agent execution steps.
+====================================================================
+
+for item in orchestrator.chat_stream(
+    prompt,
+    context={"employee_id": emp.employee_id}
+):
+    if item["type"] == "step":
+        displayed_steps.append(item["step"])
+        with planning_placeholder.container():
+            st.markdown("**Agent Planning**")
+            for ps in displayed_steps:
+                icon = "OK" if ps["status"] == "completed" else "X"
+                st.markdown(f"{icon} **{ps['step']}** - {ps['detail']}")
+            st.caption("Processing...")
+    elif item["type"] == "result":
+        result_data = item
+
+response = result_data.get("response", "I couldn't process that. Please try again.")
+escalated = result_data.get("escalated", False)
+escalation_id = result_data.get("escalation_id", "")
+if escalated:
+    if escalation_id:
+        st.warning(f"This request has been escalated. Case ID: {escalation_id}")
+    else:
+        st.warning("This request has been escalated for human review.")
+
+
+====================================================================
+NOTES FOR REPORT APPENDIX
+====================================================================
+1) These snippets are selected to represent core agentic behaviors:
+   - autonomous planning
+   - tool invocation
+   - confidence-based escalation
+   - human feedback loop
+   - event-driven collaboration
+   - transparent streaming UI
+
+2) For strict reproducibility in your appendix, cite original files and line ranges:
+   - core/base_agent.py
+   - core/orchestrator.py
+   - core/event_bus.py
+   - core/learning_module.py
+   - ui/employee_portal.py
+
+3) If your university requires exact unmodified code, copy directly from source files instead of this curated excerpt file.

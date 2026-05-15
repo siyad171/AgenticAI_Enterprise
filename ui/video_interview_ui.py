@@ -362,7 +362,14 @@ def show_video_interview():
     elif step == "processing":
         _show_processing(q, recorder, cand_id)
     elif step == "results":
-        _show_question_results()
+        # Candidate-side result view is intentionally hidden.
+        next_idx = st.session_state.vi_q_idx + 1
+        if next_idx < total_q:
+            st.session_state.vi_q_idx = next_idx
+            st.session_state.vi_step = "interview"
+        else:
+            st.session_state.vi_step = "done"
+        st.rerun()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -526,10 +533,15 @@ def _show_processing(q, recorder, cand_id):
     progress.progress(100, text="✅ Analysis complete!")
     time.sleep(0.5)
 
-    # Store and advance
+    # Store and advance without exposing analysis in candidate portal.
     st.session_state.vi_results.append(result)
-    st.session_state.vi_current_result = result
-    st.session_state.vi_step = "results"
+    total_q = len(VIDEO_QUESTIONS)
+    next_idx = st.session_state.vi_q_idx + 1
+    if next_idx < total_q:
+        st.session_state.vi_q_idx = next_idx
+        st.session_state.vi_step = "interview"
+    else:
+        st.session_state.vi_step = "done"
     st.session_state.frame_recorder = FrameRecorder()  # free memory
     st.rerun()
 
@@ -628,22 +640,8 @@ def _show_question_results():
 # ═══════════════════════════════════════════════════════════════
 
 def _show_final_summary(cand_id):
-    results = st.session_state.get("vi_results", [])
-
-    if not results:
-        st.info("No video interview results recorded.")
-    else:
-        st.markdown("### 🎬 Video Interview — Summary")
-        avg = sum(r.get("final_score", 0) for r in results) / len(results)
-        st.metric("Average Score", f"{avg:.0f}/100")
-
-        for i, r in enumerate(results):
-            with st.expander(f"Q{i + 1}: {r.get('question', '')}", expanded=False):
-                st.write(f"**Score:** {r.get('final_score', 0)}/100")
-                st.write(f"**Recommendation:** {r.get('recommendation', 'N/A')}")
-                st.write(f"**Duration:** {r.get('duration_seconds', 0)}s")
-                if r.get("transcript"):
-                    st.write(f"**Transcript:** {r['transcript']}")
+    st.success("Video interview submitted successfully.")
+    st.info("Your interview has been recorded and shared with the hiring team for review.")
 
     st.divider()
     if st.button("✅ Complete Application", type="primary",

@@ -1,408 +1,544 @@
-# Agentic AI Testing Guide
+# Agentic AI End-to-End Testing Guide (Updated)
 
-## What Makes This System "Agentic"
+## Objective
+Use this guide to validate the current system behavior for:
+1. Unified assistant routing and domain tool execution
+2. Escalation lifecycle (Open -> Resolved)
+3. Learning persistence and escalation bypass via learned overrides
 
-Your agents now follow the **ReAct (Reasoning + Acting)** loop:
-
-```
-User Message → PERCEIVE → REASON & PLAN → ACT (call tools) → EVALUATE → LEARN → RESPOND
-```
-
-Instead of clicking buttons and filling forms, users **describe what they need in natural language**, and the agent **thinks, decides, and acts autonomously**.
-
----
-
-## How to Start the App
+## Start The App
 
 ```bash
 streamlit run ui/app.py
 ```
 
----
+## Test Accounts (Seed Data)
+- Admin: `admin` / `admin123`
+- Employee 1: `john.doe` / `pass123`
+- Employee 2: `jane.smith` / `pass123`
 
-## Testing the Unified AI Assistant (Employee Portal)
-
-The Employee Portal now has a **Unified AI Assistant** powered by the Orchestrator.
-Instead of only handling HR queries, it **intelligently routes** requests to the correct agent
-(HR, IT, Finance, Compliance) and shows a **live Agent Planning checklist** so you can see
-exactly how the agent thinks, plans, and acts.
-
-### Login
-- **Username:** `john` | **Password:** `john123` (Employee role)
-
-### Where to Test
-- Sidebar → **🤖 AI Assistant**
+## Current UI Menus
+- Employee menu: `🏠 Dashboard`, `🤖 AI Assistant`, `👤 Profile`
+- Admin menu: `🏠 Dashboard`, `👥 Employees`, `📋 Candidates`, `📊 Audit Report`, `🚨 Escalations`, `🤖 Admin Assistant`, `⚙️ Settings`
 
 ---
 
-### Test 1: HR Routing — Leave Request
+## Section A - Unified Assistant Routing + Tool Visibility
 
-**Type this in the chat:**
+Login as employee (`john.doe`) and open `🤖 AI Assistant`.
+
+For each prompt below, verify:
+1. `Handled by:` badge shows expected domain agent
+2. Planning includes Routing + Perceiving + Planning + Executing + Evaluating (for non-escalated flows)
+3. Tool calls appear under `⚡ Actions Taken`
+
+### A1. HR leave processing
+Prompt:
+```text
+I want to take casual leave from 2026-04-10 to 2026-04-12 for a family event
 ```
-I want to take casual leave from 2026-03-10 to 2026-03-12 for a family function
+Expected:
+- Routed to `🏥 HR Agent`
+- `process_leave_request` appears in actions
+- Response includes decision path (Approved/Pending/Rejected based on policy + balance)
+
+### A2. HR policy answer
+Prompt:
+```text
+What is the remote work policy?
 ```
+Expected:
+- Routed to `🏥 HR Agent`
+- Policy response returned (may call `ask_hr_policy_question`)
 
-**What to Expect:**
-- 🤖 Agent shows "Thinking..." spinner
-- **Agent badge** appears: `Handled by: 🏥 HR Agent`
-- **🧠 Agent Planning** checklist (expanded) shows:
-  - ✅ **Routing** — Routed to 🏥 HR Agent
-  - ✅ **Perceiving** — Employee: John, Dept: Engineering
-  - ✅ **Planning** — Tools: process_leave_request (confidence: 90%)
-  - ✅ **Executing** — process_leave_request → Approved
-  - ✅ **Evaluating** — Generating response (confidence: 90%)
-- Agent **responds**: tells you the leave is approved (3 days ≤ 10 day auto-approve limit)
-- You can expand **💭 Reasoning** to see the full reasoning chain
-- You can expand **⚡ Actions Taken** to see which tools were called
-
-**Expected Result:**
-- Leave status: **Approved** (3 days, auto-approved)
-- Confidence: ~0.90–0.95
-- Routing: HR Agent
-- Planning checklist: all ✅
-
----
-
-### Test 2: IT Routing — Laptop Issue
-
-**Type:**
+### A3. HR leave history
+Prompt:
+```text
+Show my leave history
 ```
-My laptop is not charging and the screen flickers sometimes
+Expected:
+- Routed to `🏥 HR Agent`
+- `get_leave_history` behavior reflected in response content
+
+### A4. HR employee info
+Prompt:
+```text
+Show my employee details and leave balance
 ```
+Expected:
+- Routed to `🏥 HR Agent`
+- `get_employee_info` behavior reflected in response content
 
-**What to Expect:**
-- **Agent badge**: `Handled by: 🔧 IT Agent`
-- **🧠 Agent Planning** shows:
-  - ✅ **Routing** — Routed to 🔧 IT Agent
-  - ✅ **Perceiving** — Employee: John, Dept: Engineering
-  - ✅ **Planning** — Tools: create_ticket (confidence: ~85%)
-  - ✅ **Executing** — create_ticket → Ticket TKT... created
-  - ✅ **Evaluating** — Generating response
-- Agent creates an IT support ticket and gives you a ticket ID
-- Resolution suggestions from the LLM (e.g., check charger, run diagnostics)
-
-**Expected Result:**
-- Ticket created with category **Hardware**, priority **Medium** or **High**
-- Routing: IT Agent
-- Planning checklist: all ✅
-
----
-
-### Test 3: IT Routing — Access Request
-
-**Type:**
+### A5. IT ticket creation
+Prompt:
+```text
+My laptop is overheating and shuts down randomly
 ```
+Expected:
+- Routed to `🔧 IT Agent`
+- `create_ticket` appears in actions
+- Ticket ID format `TKT...` returned
+
+### A6. IT ticket status
+Prompt (use ticket from A5):
+```text
+Check status of ticket TKT2026...
+```
+Expected:
+- Routed to `🔧 IT Agent`
+- `get_ticket_status` appears in actions
+
+### A7. IT access grant
+Prompt:
+```text
 I need VPN access for remote work
 ```
+Expected:
+- Routed to `🔧 IT Agent`
+- `grant_access` appears in actions
 
-**What to Expect:**
-- **Agent badge**: `Handled by: 🔧 IT Agent`
-- Agent calls `grant_access` tool with system=VPN
-- Planning checklist shows routing to IT, then grant_access execution
+### A8. IT open ticket summary
+Prompt:
+```text
+Show all open IT tickets
+```
+Expected:
+- Routed to `🔧 IT Agent`
+- `get_open_tickets_summary` appears in actions
 
 ---
 
-### Test 4: IT Routing — Ticket Status Check
+## Section B - Escalation + Learning (Critical)
 
-**Type (use a ticket ID from Test 2):**
-```
-Check the status of my ticket TKT20260309...
-```
-
-**What to Expect:**
-- Routes to IT Agent
-- Calls `get_ticket_status` tool
-- Returns ticket details (status, category, priority, description)
-
----
-
-### Test 5: HR Routing — Policy Question
-
-**Type:**
-```
-What is the company's remote work policy?
-```
-
-**What to Expect:**
-- **Agent badge**: `Handled by: 🏥 HR Agent`
-- Routes to HR (policy-related keyword)
-- Agent may call `ask_hr_policy_question` tool OR answer directly
-- Planning shows: Routing → HR, Perceiving, Planning (possibly no_tool_needed), Evaluating
-
----
-
-### Test 6: HR Routing — Leave Balance
-
-**Type:**
-```
-Show me my leave balance
-```
-
-**What to Expect:**
-- Routes to HR Agent
-- Returns your current leave balances
-- If you took leave in Test 1, casual balance will be reduced
-
----
-
-### Test 7: Leave Request That Needs Approval
-
-**Type:**
-```
-I need annual leave from 2026-03-05 to 2026-03-25 for international travel
-```
-
-**What to Expect:**
-- Routes to HR Agent
-- Agent reasons that 21 days > 10 day auto-approve limit → requires manager approval
-- Leave status: **Pending** (requires manager approval)
-- Planning checklist shows all steps completed
-
----
-
-### Test 8: Ambiguous Request (Tests Reasoning)
-
-**Type:**
-```
-I'm not feeling well, can I take tomorrow off?
-```
-
-**What to Expect:**
-- Routes to HR Agent
-- Agent **reasons**: "not feeling well" → sick leave, "tomorrow" → calculates tomorrow's date
-- Agent calls `process_leave_request` with leave_type="Sick Leave"
-- Planning shows the full reasoning chain
-
----
-
-### Test 9: Escalation (Low Confidence)
-
-**Type:**
-```
+### B1. Generate escalation from employee chat
+As employee, send:
+```text
 Can you fire my manager?
 ```
+Expected:
+1. Assistant indicates human review is required
+2. Warning contains case ID in format `ESC-...`
+3. No destructive action executed
 
-**What to Expect:**
-- Agent recognizes this is outside its capabilities
-- Confidence drops below threshold (0.6)
-- Planning checklist shows: Routing → ✅, Perceiving → ✅, Planning → ✅, **Escalation → ✅**
-- Response: "I've analyzed your request but I'm not confident enough to act autonomously..."
-- Shows **⚠️ This request has been escalated for human review**
-
----
-
-### Test 10: Cross-Domain Routing Verification
-
-Test these one by one to verify routing works for each agent:
-
-| # | Message | Expected Agent |
-|---|---------|----------------|
-| a | *"Submit an expense claim for $150 taxi reimbursement"* | 💰 Finance Agent |
-| b | *"What compliance trainings am I overdue on?"* | 📋 Compliance Agent |
-| c | *"I need to report a security concern about data handling"* | 📋 Compliance Agent |
-| d | *"My email is not working"* | 🔧 IT Agent |
-| e | *"Show me my leave history"* | 🏥 HR Agent |
-
-For each, verify:
-- ✅ Correct agent badge appears
-- ✅ Planning checklist starts with correct Routing step
-- ✅ Agent responds appropriately
-
----
-
-### Test 11: Planning Checklist in Chat History
-
-1. Send any request (e.g., *"How many sick leaves do I have?"*)
-2. Verify the **🧠 Agent Planning** expander is **expanded** on the latest message
-3. Send a second request (e.g., *"I need VPN access"*)
-4. Scroll up — the first message's planning should now be **collapsed**
-5. The latest message's planning should be **expanded**
-
----
-
-## Testing the IT Agent (Admin Portal)
-
-### Login
-- **Username:** `admin` | **Password:** `admin123` (Admin role)
-
-### Where to Test
-- Sidebar → **🖥️ IT** → **💬 IT Assistant** tab
-
----
-
-### Test 8: Create IT Ticket via Natural Language
-
-**Type:**
+### B2. Generate policy-sensitive escalation
+Send:
+```text
+My manager is harassing me and I want immediate disciplinary action
 ```
-EMP002's laptop screen is flickering badly, this is urgent
+Expected:
+1. Escalation created with sensitivity reason
+2. Case appears in admin escalation queue
+
+### B3. Admin queue visibility
+Login as admin -> `🚨 Escalations`.
+Expected for each open case:
+1. Shows case ID, employee, confidence, escalation reason, employee request
+2. Shows proposed response (if captured)
+3. `Agent Reasoning` expander available when reasoning exists
+
+### B4. Resolve escalation and persist learning
+In each open case:
+1. Choose one decision type:
+	 - `Approve agent proposed response`
+	 - `Override with corrected decision`
+	 - `Escalate to specialist team`
+2. Provide natural-language final response
+3. Provide `Decision rationale`
+4. Click `Save Decision`
+
+Expected:
+1. Case moves from Open to Resolved
+2. Success message: `Decision saved and learning memory updated.`
+3. Resolved list shows `Learning: True`
+
+### B5. Admin Assistant escalation commands
+Admin -> `🤖 Admin Assistant` and run:
+
+```text
+show escalation stats
 ```
 
-**What to Expect:**
-- Agent **reasons**: hardware issue, urgent → High priority
-- Agent **acts**: calls `create_ticket` with category=Hardware, priority=High
-- Agent **responds**: ticket ID, plus troubleshooting suggestions from LLM
-- Expand reasoning to see: "This indicates a hardware issue that needs immediate attention"
+```text
+show open escalations
+```
 
-**Expected Result:**
-- Ticket created with status **Open**, priority **High**
-- Actions: `create_ticket ✅`
+```text
+resolve ESC-<id> approve because reviewed and policy-compliant
+```
+
+Also verify these variants:
+
+```text
+resolve ESC-<id> override because requires corrected response wording
+```
+
+```text
+resolve ESC-<id> escalate because requires specialist team follow-up
+```
+
+Expected:
+- Commands execute successfully
+- Queue + stats reflect updates
+- Resolve response confirms decision saved to learning memory
+
+### B6. Learning persistence file checks
+Check these files after at least one admin resolution:
+- `data/learning/hr_agent_learning.json` (or the resolved agent's learning file)
+- `data/learning/<agent>_agent_decisions_audit.json`
+
+Expected in `*_learning.json`:
+- `overrides` array exists
+- New entry includes:
+	- `decision_id` = escalation case ID
+	- `task` = original employee request
+	- `admin_decision`
+	- `reason`
+	- optional `employee_response`
+	- `context.escalation_type`, `context.escalation_reason`, `context.agent_confidence`, `context.admin_decision_type`
+
+Expected in `*_decisions_audit.json`:
+- `decisions` array exists
+- no `overrides` array (policy memory and decision audit are intentionally split)
+
+### B7. Learning replay (escalation bypass) validation
+After resolving a case in B4/B5, login again as employee and send a very similar prompt.
+
+Expected:
+1. If override match is strong, request can be handled without new escalation
+2. Planning includes `Learning Match` step
+3. Planning shows escalation bypass detail (policy-sensitive or low-confidence bypass)
+4. Response style follows the learned admin response pattern
 
 ---
 
-### Test 9: Grant System Access
+## Section C - Automated Escalation/Learning Regression
 
-**Type:**
-```
-Give EMP001 admin access to GitHub
-```
+Run:
 
-**What to Expect:**
-- Agent calls `grant_access` with system=GitHub, access_level=Admin
-- Returns access record ID
-- Actions: `grant_access ✅`
-
----
-
-### Test 10: Open Tickets Summary
-
-**Type:**
-```
-Show me all open tickets
-```
-
-**What to Expect:**
-- Agent calls `get_open_tickets_summary` tool
-- Returns count of open tickets, breakdown by priority and category
-- Lists each open ticket with details
-
----
-
-### Test 11: Resolve a Ticket
-
-**Type (use a real ticket ID from Test 8):**
-```
-Resolve ticket TKT20260301... — replaced the display cable and updated drivers
-```
-
-**What to Expect:**
-- Agent calls `resolve_ticket` with the resolution description
-- Ticket status changes to **Resolved**
-- Check the **📊 Ticket Dashboard** tab to verify
-
----
-
-### Test 12: Revoke Access
-
-**Type:**
-```
-Revoke VPN access for EMP003, they left the company
-```
-
-**What to Expect:**
-- Agent calls `revoke_access` for the VPN system
-- Returns list of revoked access record IDs
-
----
-
-## What to Look For in Every Test
-
-### 1. Agent Planning Checklist (🧠)
-Click the **🧠 Agent Planning** expander after every response. You should see:
-- **Routing** — which agent was selected and why
-- **Perceiving** — employee context gathered
-- **Planning** — which tools were chosen and confidence level
-- **Executing** — each tool call and its result
-- **Evaluating** — final response generation
-- All steps should show ✅ for success, ❌ for failures
-
-### 2. Agent Badge
-Every response shows a `Handled by:` badge:
-- 🏥 HR Agent — leave, policy, employee info
-- 🔧 IT Agent — tickets, access, assets
-- 💰 Finance Agent — expenses, payroll
-- 📋 Compliance Agent — training, violations, audits
-
-### 3. Reasoning (💭)
-Click the **💭 Reasoning** expander to see:
-- **What** the agent understood from your message
-- **Why** it chose that specific tool
-- **How** it extracted parameters (dates, employee IDs, etc.)
-
-### 4. Actions Taken (⚡)
-Click the **⚡ Actions Taken** expander to see:
-- Which tool(s) were called
-- ✅ for success, ❌ for failure
-
-### 5. Confidence Score
-The agent assigns a confidence score (0.0–1.0) to every decision:
-- **0.9–1.0**: Very confident, acted autonomously
-- **0.6–0.9**: Reasonably confident, acted but may note uncertainty
-- **Below 0.6**: Escalated to human review (no action taken)
-
-### 6. Learning
-Every decision is recorded by the LearningModule. Over time:
-- Similar past decisions appear as context for new requests
-- The agent references past outcomes to make better decisions
-
----
-
-## The Agentic Difference — Before vs After
-
-| Aspect | Before (Multi-Agent) | Now (Agentic AI) |
-|--------|---------------------|-------------------|
-| **Employee Chat** | HR-only assistant | Unified AI Assistant routes to HR, IT, Finance, or Compliance |
-| **Routing** | Hardcoded to HR | LLM + keyword fallback classifies and routes automatically |
-| **Transparency** | Reasoning expander only | Full Agent Planning checklist (Routing → Perceive → Plan → Execute → Evaluate) |
-| **Leave Request** | Fill form: select type, pick dates, type reason, click Submit | Say: *"I want casual leave next week"* — agent figures out the rest |
-| **IT Ticket** | Fill form: select employee, category, priority, description | Say: *"My laptop crashed"* — agent determines category, priority, creates ticket |
-| **Policy Q&A** | Separate page, standalone chat | Same chat — agent knows when to answer vs. when to act |
-| **Access Mgmt** | Separate forms for grant/revoke | Say: *"I need VPN access"* — agent handles it |
-| **Decision Making** | Code follows if/else rules only | LLM reasons about context, policies, history, then decides |
-| **Learning** | None | Every decision recorded, past decisions inform future ones |
-
----
-
-## Running Automated Tests
-
-### Quick Agentic Test (requires API key)
 ```bash
-python test_agentic.py
+python -m pytest tests/test_admin_escalation_memory.py -q
 ```
-Verifies: tool registry, learning module, goal tracker, and one live LLM call.
 
-### Full Agentic Flow Test (requires API key)
-```bash
-python test_agentic_full.py
-```
-Tests: leave request, IT ticket creation, policy Q&A — all via natural language through the ReAct loop.
+Current expected result:
+- `7 passed`
 
-### Existing Unit Tests (no API key needed)
-```bash
-python -m pytest tests/ -x --tb=short
-```
-Verifies all 22 existing tests still pass (interview process, database, event bus, HR tools, etc.)
+Coverage in this suite includes:
+- Escalation resolution writes override learning
+- Open/Resolved queue filtering
+- Learned override prevents re-escalation (low-confidence and policy-sensitive paths)
+- Policy-memory and decisions-audit file separation
+- Override persistence across runtime sessions
+- Preference for stored `employee_response` when present
+
+---
+
+## Section D - Full Tool-Level Validation (IT, Finance, Compliance)
+
+Use this section to validate every tool method with expected outcomes.
+
+### D0. Test setup and ID tracking
+Before starting D1-D3, keep these IDs as you generate them:
+- `ticket_id` from IT `create_ticket`
+- `expense_id` from Finance `submit_expense`
+- `violation_id` from Compliance `report_violation`
+- `training_id` from Compliance `schedule_training`
+- `document_id` from Compliance `manage_document` upload
+
+Recommended employee IDs from seed data:
+- `EMP001` (john.doe)
+- `EMP002` (jane.smith)
+
+### D1. IT tools (all methods)
+
+1. `create_ticket`
+Input example:
+- employee: `EMP001`
+- category: `Hardware`
+- description: `Laptop fan noise and random shutdown`
+- priority: `High`
+Expected:
+- `status = success`
+- `ticket_id` starts with `TKT`
+- ticket saved with status `Open`
+
+2. `get_ticket_status`
+Input:
+- use `ticket_id` from step 1
+Expected:
+- `status = success`
+- `ticket.ticket_id` matches input
+- `ticket.status` initially `Open`
+
+3. `resolve_ticket`
+Input:
+- same `ticket_id`
+- resolution: `Thermal cleanup and BIOS update completed`
+Expected:
+- `status = success`
+- response includes same `ticket_id`
+- follow-up `get_ticket_status` shows `status = Resolved`
+
+4. `grant_access`
+Input example:
+- employee: `EMP001`
+- system: `VPN`
+- access_level: `Standard`
+Expected:
+- `status = success`
+- `record_id` starts with `ACC`
+- response contains `system = VPN`
+
+5. `revoke_access`
+Input:
+- employee: `EMP001`
+- system: `VPN`
+Expected:
+- `status = success`
+- `revoked` array returned
+- previously active VPN access record moved to `Revoked`
+
+6. `manage_software_license` (assign)
+Input example:
+- action: `assign`
+- software: choose one with available licenses in DB
+- employee: `EMP001`
+Expected:
+- if license available: `status = success` and `license_id` returned
+- if not available: `status = error` with `No available license ...`
+
+7. `manage_software_license` (release)
+Input example:
+- action: `release`
+- software: same as above
+Expected:
+- `status = success`
+- message confirms release
+
+8. `track_asset` by employee
+Input:
+- employee: `EMP001`
+Expected:
+- `status = success`
+- `assets` array returned (can be empty)
+
+9. `track_asset` by asset id (optional if known asset exists)
+Input:
+- asset_id: any valid asset from DB
+Expected:
+- valid ID: `status = success` + `asset` object
+- invalid ID: `status = error` + `Asset not found`
+
+10. `get_open_tickets_summary`
+Input:
+- no parameters
+Expected:
+- `status = success`
+- response contains `total_open`, `by_priority`, `by_category`, `tickets`
+
+### D2. Finance tools (all methods)
+
+1. `submit_expense`
+Input example:
+- employee: `EMP001`
+- category: `Travel`
+- amount: `120.0`
+- description: `Client meeting travel`
+Expected:
+- `status = success`
+- `expense_id` starts with `EXP`
+- `approval_status` is either:
+	- `Approved` (if amount <= auto-approve limit)
+	- `Pending` (if amount above limit)
+
+2. `get_expense_status`
+Input:
+- use `expense_id` from step 1
+Expected:
+- `status = success`
+- returned `expense_id` matches input
+- `approval_status` matches latest decision
+
+3. `approve_expense`
+Input:
+- use `expense_id` from step 1
+- approved_by: `Finance Admin`
+- decision: `Approved`
+Expected:
+- `status = success`
+- response includes same `expense_id`
+- follow-up `get_expense_status` shows approved state
+
+4. `process_reimbursement`
+Input:
+- approved `expense_id`
+Expected:
+- if approved expense: `status = success`, `reimbursement_id` starts with `RMB`, `amount` returned
+- if not approved: `status = error`, `Expense not approved`
+
+5. `process_payroll`
+Input example:
+- month: `03`
+- year: `2026`
+Expected:
+- `status = success`
+- response includes `total_employees` and `records`
+- each record has `employee_id` and `net_salary`
+
+6. `get_payroll_summary`
+Input:
+- same month/year as step 5
+Expected:
+- `status = success`
+- includes `total_employees` and `total_payroll`
+
+7. `manage_budget` allocate
+Input example:
+- department: `Engineering`
+- action: `allocate`
+- amount: `150000`
+Expected:
+- `status = success`
+- response includes `department` and `allocated`
+
+8. `manage_budget` view
+Input:
+- department: same as step 7
+- action: `view`
+Expected:
+- `status = success`
+- response includes `allocated`, `spent`, `remaining`
+- if no budget exists for chosen dept: `status = error`, `No budget for ...`
+
+9. `ask_finance_policy`
+Input example:
+- `What is reimbursement policy for travel expenses?`
+Expected:
+- `status = success`
+- non-empty `answer` string
+
+### D3. Compliance tools (all methods)
+
+1. `report_violation`
+Input example:
+- reported_by: `EMP001`
+- category: `Policy Breach`
+- description: `Possible data handling policy breach`
+- severity: `High`
+Expected:
+- `status = success`
+- `violation_id` starts with `VIO`
+- severity returned in response
+
+2. `get_violation_status`
+Input:
+- use `violation_id` from step 1
+Expected:
+- `status = success`
+- includes same `violation_id`
+- `current_status` initially `Open`
+
+3. `resolve_violation`
+Input:
+- same `violation_id`
+- resolution: `Investigated and corrective action documented`
+Expected:
+- `status = success`
+- follow-up `get_violation_status` shows resolved status
+
+4. `schedule_training`
+Input example:
+- employee: `EMP001`
+- training_type: `Data Privacy`
+- due_date: future date (e.g. `2026-05-15`)
+- mandatory: `True`
+Expected:
+- `status = success`
+- `training_id` starts with `TRN`
+
+5. `get_training_status` by training ID
+Input:
+- use `training_id` from step 4
+Expected:
+- `status = success`
+- response includes same `training_id` and `status`
+
+6. `get_training_status` by employee ID
+Input:
+- employee: `EMP001`
+Expected:
+- `status = success`
+- `trainings` array returned (may include mandatory scheduled items)
+
+7. `run_compliance_audit`
+Input:
+- scope: `full`
+Expected:
+- `status = success`
+- `audit_id` starts with `AUD`
+- `compliance_status` is `COMPLIANT` or `ISSUES_FOUND`
+- includes `findings_count` and `findings`
+
+8. `manage_document` upload
+Input example:
+- action: `upload`
+- doc_type: `Policy`
+- title: `Remote Work Policy v2`
+- version: `2.0`
+Expected:
+- `status = success`
+- `document_id` starts with `DOC`
+
+9. `manage_document` list
+Input:
+- action: `list`
+- doc_type: `Policy`
+Expected:
+- `status = success`
+- `documents` array returned
+- uploaded document appears in list (same title/version)
+
+10. `ask_compliance_policy`
+Input example:
+- `What is the incident reporting SLA?`
+Expected:
+- `status = success`
+- non-empty `answer` string
+
+### D4. Completion criteria for Section D
+Mark Section D complete only if all are true:
+1. Every IT/Finance/Compliance method listed above was executed at least once
+2. Each method returned expected success/error structure
+3. Linked retrieval checks succeeded (status after create/resolve flows)
+4. Generated IDs follow prefixes (`TKT`, `ACC`, `EXP`, `RMB`, `VIO`, `TRN`, `AUD`, `DOC`)
+
+---
+
+## Section E - Fast Recommended Sequence
+
+1. Run A1, A5, A7, A8 for routing + HR/IT chat tool visibility
+2. Run B1 and B2 to generate at least 2 escalations
+3. Resolve one via `🚨 Escalations` (B4) and one via `🤖 Admin Assistant` (B5)
+4. Validate persistence in B6 and replay in B7
+5. Execute all tool-level checks in Section D (IT, Finance, Compliance)
+6. Run automated regression (Section C)
+
+---
+
+## Pass Criteria
+System is considered verified when all are true:
+1. Representative prompts route to expected domain agent
+2. Tool calls are visible and successful for chat-reachable HR/IT flows
+3. Escalations produce `ESC-...` case IDs and appear in admin queue
+4. Admin resolution stores decision and marks learning recorded
+5. Learning override entries persist in `data/learning/*_learning.json`
+6. Similar future requests can use learned override and avoid re-escalation when appropriate
+7. `tests/test_admin_escalation_memory.py` passes
 
 ---
 
 ## Troubleshooting
-
-| Issue | Cause | Fix |
-|-------|-------|-----|
-| Agent says "I can help with..." but doesn't act | LLM couldn't parse the plan JSON | Rephrase more clearly, e.g., include employee ID explicitly |
-| "Escalated for human review" | Agent confidence < 0.6 | Request is too ambiguous or outside agent capabilities — be more specific |
-| Slow responses (~5-10 seconds) | ReAct loop makes 2-3 LLM calls per request | Normal — the 70B model is reasoning, planning, and evaluating |
-| Email notification failed | SMTP credentials not configured | Expected — the leave is still processed, just the email fails |
-| No response at all | API key not set or rate limited | Check `.env` file has `GROQ_API_KEY` set |
-
----
-
-## Interview Process — Untouched
-
-The full interview pipeline remains exactly as before:
-- ✅ Resume parsing
-- ✅ Psychometric assessment
-- ✅ Technical interview chat
-- ✅ Video interview analysis
-- ✅ Candidate report generation
-
-These features are accessed through the **Candidate Portal** and **Admin → Candidates** and are **not affected** by the agentic changes.
+- If a request does not escalate: use more sensitive wording or ambiguous phrasing
+- If escalations are not visible in admin: ensure request came from employee assistant and included employee context
+- If save fails in admin escalation: ensure both final response and rationale are filled
+- If learning replay does not trigger: use a closer prompt match (shared key terms with resolved escalation)
+- If tests are flaky due existing learning data: use unique task strings in test prompts or isolate temporary storage

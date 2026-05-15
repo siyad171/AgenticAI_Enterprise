@@ -1,0 +1,25 @@
+{
+  "question": "Tell us about yourself and explain why you're interested in this role.",
+  "question_id": "VQ_01",
+  "audio_file": "C:\\Users\\KALLAI\\Desktop\\Github clone\\Updated\\AgenticAI_Enterprise\\data\\video_interviews\\CAND20260506174202\\q1_20260506_175214.wav",
+  "video_file": "C:\\Users\\KALLAI\\Desktop\\Github clone\\Updated\\AgenticAI_Enterprise\\data\\video_interviews\\CAND20260506174202\\q1_20260506_175214.avi",
+  "duration_seconds": 43.3,
+  "transcript": "Hi! I am both\u606dori Hi, I'm a great this welcome dar\u00fcber to start I have a key interesting software element like a handy problem solving when I finally wanted to implement a first stack of applications. When I work on the whole project adding back to the cloud, which gave me some experience in the setting that it wouldn't be. Like this, now I'm an expert on the gas item, I don't like anything, or I don't like anything. The d\u00e9pist Czech Language is about 22\u00e8me part, It was Warehouse Medical Katara Not Clay.",
+  "emotions": {
+    "available": false
+  },
+  "evaluation": {
+    "criteria_scores": {
+      "communication": 20,
+      "enthusiasm": 40,
+      "relevance": 10,
+      "clarity": 10
+    },
+    "overall_score": 20,
+    "feedback": "The candidate's response lacked coherence and failed to effectively communicate their qualifications or interest in the role. To improve, the candidate should focus on clearly articulating their skills and experiences. Additionally, practicing responses to common interview questions can help increase confidence and clarity.",
+    "recommendation": "No Hire"
+  },
+  "final_score": 20,
+  "recommendation": "No Hire",
+  "timestamp": "2026-05-06T17:52:35.405817"
+}
